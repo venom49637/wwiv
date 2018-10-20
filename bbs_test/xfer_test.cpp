@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)2007, WWIV Software Services                  */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2007-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,9 +18,10 @@
 /**************************************************************************/
 #include "gtest/gtest.h"
 
+#include <string>
+
 using std::cout;
 using std::endl;
-using std::ostringstream;
 using std::string;
 
 // TODO(rushfan): Make xfer.h

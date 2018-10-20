@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -22,16 +22,17 @@
 
 #include "bbs/bbs.h"
 #include "bbs/com.h"
-#include "bbs/wconstants.h"
-#include "bbs/wuser.h"
-#include "bbs/wsession.h"
-#include "bbs/vars.h"
-#include "bbs/wstatus.h"
+#include "bbs/finduser.h"
+#include "local_io/wconstants.h"
+#include "bbs/application.h"
 #include "core/strings.h"
 #include "core/file.h"
+#include "sdk/status.h"
+#include "sdk/user.h"
 #include "sdk/filenames.h"
 
 using std::string;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 //
@@ -45,40 +46,36 @@ using namespace wwiv::strings;
 // Special values:
 //
 //  -1      = NEW USER
-//  -2      = WWIVnet
 //
 int finduser(const string& searchString) {
-  WUser user;
+  User user;
 
-  guest_user = false;
-  application()->users()->SetUserWritesAllowed(true);
+  a()->context().guest_user(false);
+  a()->users()->set_user_writes_allowed(true);
   if (searchString == "NEW") {
     return -1;
   }
-  if (searchString == "!-@NETWORK@-!") {
-    return -2;
-  }
-  int nUserNumber = atoi(searchString.c_str());
-  if (nUserNumber > 0) {
-    application()->users()->ReadUser(&user, nUserNumber);
+  auto user_number = to_number<int>(searchString);
+  if (user_number > 0) {
+    a()->users()->readuser(&user, user_number);
     if (user.IsUserDeleted()) {
       return 0;
     }
-    return nUserNumber;
+    return user_number;
   }
-  nUserNumber = application()->users()->FindUser(searchString);
-  if (nUserNumber == 0L) {
+  user_number = a()->names()->FindUser(searchString);
+  if (user_number == 0) {
     return 0;
   } 
-  application()->users()->ReadUser(&user, nUserNumber);
+  a()->users()->readuser(&user, user_number);
   if (user.IsUserDeleted()) {
     return 0;
   }
-  if (IsEqualsIgnoreCase(user.GetName(), "GUEST")) {
-    guest_user = true;
-    application()->users()->SetUserWritesAllowed(false);
+  if (iequals(user.GetName(), "GUEST")) {
+    a()->context().guest_user(true);
+    a()->users()->set_user_writes_allowed(false);
   }
-  return nUserNumber;
+  return user_number;
 }
 
 
@@ -88,26 +85,23 @@ int finduser1(const string& searchString) {
   if (searchString.empty()) {
     return 0;
   }
-  int nFindUserNum = finduser(searchString);
-  if (nFindUserNum > 0) {
-    return nFindUserNum;
+  auto un = finduser(searchString);
+  if (un > 0) {
+    return un;
   }
 
-  string userNamePart = searchString;
-  StringUpperCase(&userNamePart);
-  for (int i1 = 0; i1 < application()->GetStatusManager()->GetUserCount(); i1++) {
-    if (strstr(reinterpret_cast<char*>(smallist[i1].name), userNamePart.c_str()) != nullptr) {
-      int nCurrentUserNum = smallist[i1].number;
-      WUser user;
-      application()->users()->ReadUser(&user, nCurrentUserNum);
-      bout << "|#5Do you mean " << user.GetUserNameAndNumber(nCurrentUserNum) << " (Y/N/Q)? ";
-      char ch = ynq();
-      if (ch == 'Y') {
-        return nCurrentUserNum;
-      }
-      if (ch == 'Q') {
-        return 0;
-      }
+  auto name_part = ToStringUpperCase(searchString);
+  for (const auto& n : a()->names()->names_vector()) {
+    if (strstr(reinterpret_cast<const char*>(n.name), name_part.c_str()) == nullptr) {
+      continue;
+    }
+
+    bout << "|#5Do you mean " << a()->names()->UserName(n.number) << " (Y/N/Q)? ";
+    char ch = ynq();
+    if (ch == 'Y') {
+      return n.number;
+    } else if (ch == 'Q') {
+      return 0;
     }
   }
   return 0;

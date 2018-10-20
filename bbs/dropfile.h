@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*                Copyright (C)2014-2015 WWIV Software Services           */
+/*                              WWIV Version 5.x                          */
+/*                Copyright (C)2014-2017, WWIV Software Services          */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -20,14 +20,16 @@
 
 #include <string>
 
-#define CHAINFILE_CHAIN       0
-#define CHAINFILE_DORINFO     1
-#define CHAINFILE_PCBOARD     2
-#define CHAINFILE_CALLINFO    3
-#define CHAINFILE_DOOR        4
-#define CHAINFILE_DOOR32      5
+enum class drop_file_t {
+  CHAIN_TXT,
+  DORINFO_DEF,
+  PCBOARD_SYS,
+  CALLINFO_BBS,
+  DOOR_SYS,
+  DOOR32_SYS
+};
 
-const std::string create_filename(int nDropFileType);
+const std::string create_dropfile_filename(drop_file_t dropfile_type);
 const std::string create_chain_file();
 
 

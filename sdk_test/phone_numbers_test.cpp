@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                           WWIV Version 5.0x                            */
-/*               Copyright (C)2015 WWIV Software Services                 */
+/*                           WWIV Version 5.x                             */
+/*            Copyright (C)2015-2017, WWIV Software Services              */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -35,13 +35,14 @@
 
 using namespace std;
 
+using namespace wwiv::core;
 using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 class PhoneNumbersTest : public testing::Test {
 public:
   bool CreatePhoneNumDat(const Config& config) {
-    File file(config.datadir(), PHONENUM_DAT);
+    File file(FilePath(config.datadir(), PHONENUM_DAT));
     file.Open(File::modeBinary|File::modeWriteOnly|File::modeCreateFile, File::shareDenyNone);
     if (!file) {
       return false;

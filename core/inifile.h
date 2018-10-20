@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,17 +19,18 @@
 #ifndef __INCLUDED_INIFILE_H__
 #define __INCLUDED_INIFILE_H__
 
-#include <string>
+#include <initializer_list>
 #include <map>
+#include <string>
+#include <vector>
 
 namespace wwiv {
 namespace core {
 
-std::string FilePath(const std::string& directoryName, const std::string& fileName);
-
 class IniFile {
  public:
-  IniFile(const std::string& filename, const std::string& primarySection, const std::string& secondarySection = "");
+  IniFile(const std::string& filename, const std::initializer_list<const char*> sections);
+  IniFile(const std::string& filename, const std::initializer_list<const std::string> sections);
   // Constructor/Destructor
   virtual ~IniFile(); 
 
@@ -37,41 +38,46 @@ class IniFile {
   void Close();
   bool IsOpen() const { return open_; }
 
-  const char* GetValue(const std::string& key, const char *default_value = nullptr) const;
-  const long GetNumericValueT(const std::string& key, long default_value = 0) const;
-  const bool GetBooleanValue(const std::string& key, bool default_value = false) const;
-
   template<typename T>
-  const T GetNumericValue(const std::string& key, T default_value = 0) const {
+  T value(const std::string& key, const T& default_value) const {
     return static_cast<T>(GetNumericValueT(key, default_value));
   }
-  const long GetNumericValue(const std::string& key, long default_value = 0) const {
-    return GetNumericValueT(key, default_value);
+  template<typename T>
+  T value(const std::string& key) const {
+    return static_cast<T>(GetNumericValueT(key, T()));
   }
+
+  std::string full_pathname() const { return file_name_; }
 
  private:
   // This class should not be assigneable via '=' so remove the implicit operator=
   // and Copy constructor.
   IniFile(const IniFile& other) = delete;
   IniFile& operator=(const IniFile& other) = delete;
+  const char* GetValue(const std::string& key, const char *default_value = nullptr) const;
 
-  bool Open();
-
-  /**
-   * Reads a specified value from INI file data (contained in *inidata). The
-   * name of the value to read is contained in *value_name. If such a name
-   * doesn't exist in this INI file subsection, then *val is nullptr, else *val
-   * will be set to the string value of that value name. If *val has been set
-   * to something, then this function returns 1, else it returns 0.
-   */
-  static bool StringToBoolean(const char *p);
+  std::string GetStringValue(const std::string& key, const std::string& default_value) const;
+  long GetNumericValueT(const std::string& key, long default_value = 0) const;
+  bool GetBooleanValue(const std::string& key, bool default_value = false) const;
 
   const std::string file_name_;
   bool open_;
-  const std::string primary_;
-  const std::string secondary_;
+  std::vector<std::string> sections_;
   std::map<std::string, std::string> data_;
 };
+
+template<>
+std::string IniFile::value<std::string>(const std::string& key, const std::string& default_value) const;
+
+template<>
+std::string IniFile::value<std::string>(const std::string& key) const;
+
+template<>
+bool IniFile::value<bool>(const std::string& key, const bool& default_value) const;
+template<>
+bool IniFile::value<bool>(const std::string& key) const;
+
+
 
 }  // namespace core
 }  // namespace wwiv

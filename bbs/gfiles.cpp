@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,16 +16,28 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/gfiles.h"
 #include <string>
 
-#include "bbs/wwiv.h"
-#include "bbs/datetime.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/com.h"
+#include "bbs/gfileedit.h"
+#include "bbs/mmkey.h"
 #include "bbs/instmsg.h"
+#include "bbs/pause.h"
 #include "bbs/printfile.h"
+#include "bbs/sysoplog.h"
+#include "bbs/sr.h"
+#include "bbs/utility.h"
+#include "bbs/xfer.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
+#include "core/datetime.h"
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 void gfl_hdr(int which);
@@ -39,13 +51,12 @@ gfilerec *read_sec(int sn, int *nf) {
   gfilerec *pRecord;
   *nf = 0;
 
-  int nSectionSize = sizeof(gfilerec) * gfilesec[sn].maxfiles;
+  int nSectionSize = sizeof(gfilerec) * a()->gfilesec[sn].maxfiles;
   if ((pRecord = static_cast<gfilerec *>(BbsAllocA(nSectionSize))) == nullptr) {
     return nullptr;
   }
 
-  const string filename = StringPrintf("%s%s.gfl", syscfg.datadir, gfilesec[sn].filename);
-  File file(filename);
+  File file(FilePath(a()->config()->datadir(), StrCat(a()->gfilesec[sn].filename, ".gfl")));
   if (file.Open(File::modeBinary | File::modeReadOnly)) {
     *nf = file.Read(pRecord, nSectionSize) / sizeof(gfilerec);
   }
@@ -53,123 +64,123 @@ gfilerec *read_sec(int sn, int *nf) {
 }
 
 void gfl_hdr(int which) {
-  char s[255], s1[81], s2[81], s3[81];
-
+  string s, s1, s2, s3;
   if (okansi()) {
-    strcpy(s2, charstr(29, '\xC4'));
+    s2 = std::string(29, '\xC4');
   } else {
-    strcpy(s2, charstr(29, '-'));
+    s2 = std::string(29, '-');
   }
   if (which) {
-    strcpy(s1, charstr(12, ' '));
-    strcpy(s3, charstr(11, ' '));
+    s1 = std::string(12, ' ');
+    s3 = std::string(11, ' ');
   } else {
-    strcpy(s1, charstr(12, ' '));
-    strcpy(s3, charstr(17, ' '));
+    s1 = std::string(12, ' ');
+    s3 = std::string(17, ' ');
   }
   bool abort = false;
   if (okansi()) {
     if (which) {
-      sprintf(s, "|#7\xDA\xC4\xC4\xC4\xC2%s\xC2\xC4\xC4\xC4\xC4\xC2\xC4\xC4\xC4\xC2%s\xC2\xC4\xC4\xC4\xC4\xBF", s2, s2);
+      s = StrCat("|#7\xDA\xC4\xC4\xC4\xC2", s2, "\xC2\xC4\xC4\xC4\xC4\xC2\xC4\xC4\xC4\xC2", s2, "\xC2\xC4\xC4\xC4\xC4\xBF");
     } else {
-      sprintf(s, "|#7\xDA\xC4\xC4\xC4\xC2%s\xC4\xC4\xC4\xC4\xC4\xC2\xC4\xC4\xC4\xC2%s\xC4\xC4\xC4\xC4\xBF", s2, s2);
+      s = StrCat("|#7\xDA\xC4\xC4\xC4\xC2", s2, "\xC4\xC4\xC4\xC4\xC4\xC2\xC4\xC4\xC4\xC2", s2, "\xC4\xC4\xC4\xC4\xBF");
     }
   } else {
     if (which) {
-      sprintf(s, "+---+%s+----+---+%s+----+", s2, s2);
+      s = StrCat("+---+", s2, "+----+---+", s2, "+----+");
     } else {
-      sprintf(s, "+---+%s-----+---+%s----+", s2, s2);
+      s = StrCat("+---+", s2, "-----+---+", s2, "----+");
     }
   }
-  pla(s, &abort);
+  bout.bpla(s, &abort);
   bout.Color(0);
   if (okansi()) {
     if (which) {
-      sprintf(s, "|#7\xB3|#2 # |#7\xB3%s|#1 Name %s|#7\xB3|#9Size|#7\xB3|#2 # |#7\xB3%s|#1 Name %s|#7\xB3|#9Size|#7\xB3",
-              s1, s3, s1, s3);
+      s = StrCat("|#7\xB3|#2 # |#7\xB3", s1, "|#1 Name ", s3, "|#7\xB3|#9Size|#7\xB3|#2 # |#7\xB3", s1, "|#1 Name ", s3, "|#7\xB3|#9Size|#7\xB3");
     } else {
-      sprintf(s, "|#7\xB3|#2 # |#7\xB3%s|#1 Name%s|#7\xB3|#2 # |#7\xB3%s|#1Name%s|#7\xB3", s1, s3, s1, s3);
+      s = StrCat("|#7\xB3|#2 # |#7\xB3", s1, "|#1 Name", s3, "|#7\xB3|#2 # |#7\xB3", s1, "|#1Name", s3, "|#7\xB3");
     }
   } else {
     if (which) {
-      sprintf(s, "| # |%sName %s|Size| # |%s Name%s|Size|", s1, s1, s1, s1);
+      s = StrCat("| #   |", s1, "Name ", s1, "|Size| # |", s1, " Name", s1, "|Size|");
     } else {
-      sprintf(s, "| # |%s Name     %s| # |%s Name    %s|", s1, s1, s1, s1);
+      s = StrCat("| # |", s1, " Name     ", s1, "| # |", s1, " Name    ", s1, "|");
     }
   }
-  pla(s, &abort);
+  bout.bpla(s, &abort);
   bout.Color(0);
   if (okansi()) {
     if (which) {
-      sprintf(s, "|#7\xC3\xC4\xC4\xC4\xC5%s\xC5\xC4\xC4\xC4\xC4\xC5\xC4\xC4\xC4\xC5%s\xC5\xC4\xC4\xC4\xC4\xB4", s2, s2);
+      s = StrCat("|#7\xC3\xC4\xC4\xC4\xC5", s2, "\xC5\xC4\xC4\xC4\xC4\xC5\xC4\xC4\xC4\xC5", s2, "\xC5\xC4\xC4\xC4\xC4\xB4");
     } else {
-      sprintf(s, "|#7\xC3\xC4\xC4\xC4\xC5%s\xC4\xC4\xC4\xC4\xC4\xC5\xC4\xC4\xC4\xC5%s\xC4\xC4\xC4\xC4\xB4", s2, s2);
+      s = StrCat("|#7\xC3\xC4\xC4\xC4\xC5", s2, "\xC4\xC4\xC4\xC4\xC4\xC5\xC4\xC4\xC4\xC5", s2, "\xC4\xC4\xC4\xC4\xB4");
     }
   } else {
     if (which) {
-      sprintf(s, "+---+%s+----+---+%s+----+", s2, s2);
-    } else {
-      sprintf(s, "+---+%s-----+---+%s----+", s2, s2);
+      s = StrCat("+---+", s2, "+----+---+", s2, "+----+");
+    }
+    else {
+      s = StrCat("+---+", s2, "-----+---+", s2, "----+");
     }
   }
-  pla(s, &abort);
+  bout.bpla(s, &abort);
   bout.Color(0);
 }
 
 void list_sec(int *map, int nmap) {
-  char s[255], s1[255], s2[81], s3[81], s4[81], s5[81], s7[81];
   char lnum[5], rnum[5];
 
   int i2 = 0;
   bool abort = false;
+  string s, s2, s3, s4, s5, s6, s7;
   if (okansi()) {
-    strcpy(s2, charstr(29, '\xC4'));
-    strcpy(s3, charstr(12, '\xC4'));
-    strcpy(s7, charstr(12, '\xC4'));
+    s2 = std::string(29, '\xC4');
+    s3 = std::string(12, '\xC4');
+    s7 = std::string(12, '\xC4');
   } else {
-    strcpy(s2, charstr(29, '-'));
-    strcpy(s3, charstr(12, '-'));
-    strcpy(s7, charstr(12, '-'));
+    s2 = std::string(29, '-');
+    s3 = std::string(12, '-');
+    s7 = std::string(12, '-');
   }
 
-  bout.litebar("%s G-Files Section", syscfg.systemname);
+  bout.cls();
+  bout.litebar(StrCat(a()->config()->system_name(), " G-Files Section"));
   gfl_hdr(0);
-  for (int i = 0; i < nmap && !abort && !hangup; i++) {
+  string t = times();
+  for (int i = 0; i < nmap && !abort && !a()->hangup_; i++) {
     sprintf(lnum, "%d", i + 1);
-    strncpy(s4, gfilesec[map[i]].name, 34);
-    s4[34] = '\0';
+    s4 = trim_to_size_ignore_colors(a()->gfilesec[map[i]].name, 34);
     if (i + 1 >= nmap) {
       if (okansi()) {
-        sprintf(rnum, "%s", charstr(3, '\xFE'));
-        sprintf(s5, "%s", charstr(29, '\xFE'));
+        to_char_array(rnum, std::string(3, '\xFE'));
+        s5 = std::string(29, '\xFE');
       } else {
-        sprintf(rnum, "%s", charstr(3, 'o'));
-        sprintf(s5, "%s", charstr(29, 'o'));
+        to_char_array(rnum, std::string(3, 'o'));
+        s5 = std::string(29, 'o');
       }
     } else {
-      sprintf(rnum, "%d", i + 2);
-      strncpy(s5, gfilesec[map[i + 1]].name, 29);
-      s5[29] = '\0';
+      to_char_array(rnum, std::to_string(i + 2));
+      s5 = trim_to_size_ignore_colors(a()->gfilesec[map[i + 1]].name, 29);
     }
     if (okansi()) {
-      sprintf(s, "|#7\xB3|#2%3s|#7\xB3|#1%-34s|#7\xB3|#2%3s|#7\xB3|#1%-33s|#7\xB3", lnum, s4, rnum, s5);
+      s = StringPrintf("|#7\xB3|#2%3s|#7\xB3|#1%-34s|#7\xB3|#2%3s|#7\xB3|#1%-33s|#7\xB3", 
+        lnum, s4.c_str(), rnum, s5.c_str());
     } else {
-      sprintf(s, "|%3s|%-34s|%3s|%-33s|", lnum, s4, rnum, s5);
+      s = StringPrintf("|%3s|%-34s|%3s|%-33s|", lnum, s4.c_str(), rnum, s5.c_str());
     }
-    pla(s, &abort);
+    bout.bpla(s, &abort);
     bout.Color(0);
     i++;
     if (i2 > 10) {
       i2 = 0;
+      string s1;
       if (okansi()) {
-        sprintf(s1,
-                "|#7\xC3\xC4\xC4\xC4X%s\xC4\xC4\xC4\xC4\xC4X\xC4\xC4\xC4X\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#2\xFE|#7\xC4\xC4\xC4X",
-                s2, s3, times());
+        s1 = StringPrintf("|#7\xC3\xC4\xC4\xC4X%s\xC4\xC4\xC4\xC4\xC4X\xC4\xC4\xC4X\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#2\xFE|#7\xC4\xC4\xC4X",
+                s2.c_str(), s3.c_str(), t.c_str());
       } else {
-        sprintf(s1, "+---+%s-----+--------+%s-o-%s-o---+",
-                s2, s3, times());
+        s1 = StringPrintf("+---+%s-----+--------+%s-o-%s-o---+",
+                s2.c_str(), s3.c_str(), t.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
       bout.nl();
       pausescr();
@@ -178,39 +189,44 @@ void list_sec(int *map, int nmap) {
   }
   if (!abort) {
     if (so()) {
+      string s1;
       if (okansi()) {
-        sprintf(s1, "|#7\xC3\xC4\xC4\xC4\xC1%s\xC4\xC4\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC1%s\xC4\xC4\xC4\xC4\xB4", s2, s2);
+        s1= StringPrintf("|#7\xC3\xC4\xC4\xC4\xC1%s\xC4\xC4\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC1%s\xC4\xC4\xC4\xC4\xB4", 
+          s2.c_str(), s2.c_str());
       } else {
-        sprintf(s1, "+---+%s-----+---+%s----+", s2, s2);
+        s1 = StringPrintf("+---+%s-----+---+%s----+", s2.c_str(), s2.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
 
+      string padding61 = std::string(61, ' ');
       if (okansi()) {
-        sprintf(s1, "|#7\xB3  |#2G|#7)|#1G-File Edit%s|#7\xB3", charstr(61, ' '));
+        s1 = StringPrintf("|#7\xB3  |#2G|#7)|#1G-File Edit%s|#7\xB3", padding61.c_str());
       } else {
-        sprintf(s1, "|  G)G-File Edit%s|", charstr(61, ' '));
+        s1 = StringPrintf("|  G)G-File Edit%s|", padding61.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
       if (okansi()) {
-        sprintf(s1,
-                "|#7\xC0\xC4\xC4\xC4\xC4%s\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xC4\xC4\xD9",
-                s2, s7, times());
+        s1 = StringPrintf(
+            "|#7\xC0\xC4\xC4\xC4\xC4%s\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xC4\xC4\xD9",
+            s2.c_str(), s7.c_str(), t.c_str());
       } else {
-        sprintf(s1, "+----%s----------------%so-%s-o---+", s2, s7, times());
+        s1 = StringPrintf("+----%s----------------%so-%s-o---+", s2.c_str(), s7.c_str(), t.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
     } else {
+      string s1;
       if (okansi()) {
-        sprintf(s1,
+        s1 = StringPrintf(
                 "|#7\xC0\xC4\xC4\xC4\xC1%s\xC4\xC4\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xC4\xC4\xD9",
-                s2, s3, times());
+                s2.c_str(), s3.c_str(), t.c_str());
       } else {
-        sprintf(s1, "+---+%s-----+---------------------+%so-%s-o---+", s2, s3, times());
+        s1 = StringPrintf("+---+%s-----+---------------------+%so-%s-o---+", 
+          s2.c_str(), s3.c_str(), t.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
     }
   }
@@ -219,76 +235,79 @@ void list_sec(int *map, int nmap) {
 }
 
 void list_gfiles(gfilerec* g, int nf, int sn) {
-  int i, i2;
-  char s[255], s1[255], s2[81], s3[81], s4[30], s5[30];
-  char lnum[5], rnum[5], lsize[5], rsize[5], path_name[255];
+  int i;
+  string s, s2, s3, s4, s5;
+  string lnum, rnum, lsize, rsize;
+  const auto t = times();
 
   bool abort = false;
-  bout.litebar(gfilesec[sn].name);
-  i2 = 0;
+  bout.cls();
+  bout.litebar(a()->gfilesec[sn].name);
+  int i2 = 0;
   if (okansi()) {
-    strcpy(s2, charstr(29, '\xC4'));
-    strcpy(s3, charstr(12, '\xC4'));
+    s2 = std::string(29, '\xC4');
+    s3 = std::string(12, '\xC4');
   } else {
-    strcpy(s2, charstr(29, '-'));
-    strcpy(s3, charstr(12, '-'));
+    s2 = std::string(29, '-');
+    s3 = std::string(12, '-');
   }
   gfl_hdr(1);
-  for (i = 0; i < nf && !abort && !hangup; i++) {
+  const auto gfilesdir = a()->config()->gfilesdir();
+  for (i = 0; i < nf && !abort && !a()->hangup_; i++) {
     i2++;
-    sprintf(lnum, "%d", i + 1);
-    strncpy(s4, g[i].description, 29);
-    s4[29] = '\0';
-    sprintf(path_name, "%s%s%c%s", syscfg.gfilesdir, gfilesec[sn].filename, File::pathSeparatorChar, g[i].filename);
+    lnum = std::to_string(i + 1);
+    s4 = trim_to_size_ignore_colors(g[i].description, 29);
+    string path_name = StrCat(
+      gfilesdir, a()->gfilesec[sn].filename, File::pathSeparatorChar, g[i].filename);
     if (File::Exists(path_name)) {
       File handle(path_name);
-      sprintf(lsize, "%ld""k", bytes_to_k(handle.GetLength()));
+      lsize = StrCat(std::to_string(bytes_to_k(handle.length())), "k");
     } else {
-      sprintf(lsize, "OFL");
+      lsize = "OFL";
     }
     if (i + 1 >= nf) {
       if (okansi()) {
-        sprintf(rnum, "%s", charstr(3, '\xFE'));
-        sprintf(s5, "%s", charstr(29, '\xFE'));
-        sprintf(rsize, "%s", charstr(4, '\xFE'));
+        rnum = std::string(3, '\xFE');
+        s5 = std::string(29, '\xFE');
+        rsize = std::string(4, '\xFE');
       } else {
-        sprintf(rnum, "%s", charstr(3, 'o'));
-        sprintf(s5, "%s", charstr(29, 'o'));
-        sprintf(rsize, "%s", charstr(4, 'o'));
+        rnum = std::string(3, 'o');
+        s5 = std::string(29, 'o');
+        rsize = std::string(4, 'o');
       }
     } else {
-      sprintf(rnum, "%d", i + 2);
-      strncpy(s5, g[i + 1].description, 29);
-      s5[29] = '\0';
-      sprintf(path_name, "%s%s%c%s", syscfg.gfilesdir, gfilesec[sn].filename,
-              File::pathSeparatorChar, g[i + 1].filename);
+      rnum = std::to_string(i + 2);
+      s5 = trim_to_size_ignore_colors(g[i + 1].description, 29);
+      auto path_name = StrCat(
+        gfilesdir, a()->gfilesec[sn].filename, File::pathSeparatorChar, g[i + 1].filename);
       if (File::Exists(path_name)) {
         File handle(path_name);
-        sprintf(rsize, "%ld", bytes_to_k(handle.GetLength()));
-        strcat(rsize, "k");
+        rsize = StrCat(std::to_string(bytes_to_k(handle.length())), "k");
       } else {
-        sprintf(rsize, "OFL");
+        rsize = "OFL";
       }
     }
     if (okansi()) {
-      sprintf(s, "|#7\xB3|#2%3s|#7\xB3|#1%-29s|#7\xB3|#2%4s|#7\xB3|#2%3s|#7\xB3|#1%-29s|#7\xB3|#2%4s|#7\xB3",
-              lnum, s4, lsize, rnum, s5, rsize);
+      s = StringPrintf("|#7\xB3|#2%3s|#7\xB3|#1%-29s|#7\xB3|#2%4s|#7\xB3|#2%3s|#7\xB3|#1%-29s|#7\xB3|#2%4s|#7\xB3",
+              lnum.c_str(), s4.c_str(), lsize.c_str(), rnum.c_str(), s5.c_str(), rsize.c_str());
     } else {
-      sprintf(s, "|%3s|%-29s|%4s|%3s|%-29s|%4s|", lnum, s4, lsize, rnum, s5, rsize);
+      s = StringPrintf("|%3s|%-29s|%4s|%3s|%-29s|%4s|", 
+        lnum.c_str(), s4.c_str(), lsize.c_str(), rnum.c_str(), s5.c_str(), rsize.c_str());
     }
-    pla(s, &abort);
+    bout.bpla(s, &abort);
     bout.Color(0);
     i++;
     if (i2 > 10) {
       i2 = 0;
+      string s1;
       if (okansi()) {
-        sprintf(s1,
-                "|#7\xC3\xC4\xC4\xC4X%sX\xC4\xC4\xC4\xC4X\xC4\xC4\xC4X\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xFE\xC4\xC4\xC4\xC4\xD9",
-                s2, s3, times());
+        s1 = StringPrintf("|#7\xC3\xC4\xC4\xC4X%sX\xC4\xC4\xC4\xC4X\xC4\xC4\xC4X\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xFE\xC4\xC4\xC4\xC4\xD9",
+                s2.c_str(), s3.c_str(), t.c_str());
       } else {
-        sprintf(s1, "+---+%s+----+---+%s-o-%s-o-+----+", s2, s3, times());
+        s1 = StringPrintf("+---+%s+----+---+%s-o-%s-o-+----+", 
+          s2.c_str(), s3.c_str(), t.c_str());
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
       bout.nl();
       pausescr();
@@ -297,150 +316,144 @@ void list_gfiles(gfilerec* g, int nf, int sn) {
   }
   if (!abort) {
     if (okansi()) {
-      sprintf(s, "|#7\xC3\xC4\xC4\xC4\xC1%s\xC1\xC4\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC1%s\xC1\xC4\xC4\xC4\xC4\xB4", s2, s2);
+      s = StringPrintf("|#7\xC3\xC4\xC4\xC4\xC1%s\xC1\xC4\xC4\xC4\xC4\xC1\xC4\xC4\xC4\xC1%s\xC1\xC4\xC4\xC4\xC4\xB4", 
+        s2.c_str(), s2.c_str());
     } else {
-      sprintf(s, "+---+%s+----+---+%s+----+", s2, s2);
+      s = StringPrintf("+---+%s+----+---+%s+----+", s2.c_str(), s2.c_str());
     }
-    pla(s, &abort);
+    bout.bpla(s, &abort);
     bout.Color(0);
     if (so()) {
-      if (okansi()) {
-        sprintf(s1,
-                "|#7\xB3 |#1A|#7)|#2Add a G-File  |#1D|#7)|#2Download a G-file  |#1E|#7)|#2Edit this section  |#1R|#7)|#2Remove a G-File |#7\xB3");
-      } else {
-        sprintf(s1, "| A)Add a G-File  D)Download a G-file  E)Edit this section  R)Remove a G-File |");
-      }
-      pla(s1, &abort);
+      string s1 = okansi()
+        ? "|#7\xB3 |#1A|#7)|#2Add a G-File  |#1D|#7)|#2Download a G-file  |#1E|#7)|#2Edit this section  |#1R|#7)|#2Remove a G-File |#7\xB3"
+        : "| A)Add a G-File  D)Download a G-file  E)Edit this section  R)Remove a G-File |";
+      bout.bpla(s1, &abort);
       bout.Color(0);
     } else {
+      string s1;
       if (okansi()) {
-        sprintf(s1, "|#7\xB3  |#2D  |#1Download a G-file%s|#7\xB3", charstr(55, ' '));
+        s1 = StrCat("|#7\xB3  |#2D  |#1Download a G-file", std::string(55, ' '), "|#7\xB3");
       } else {
-        sprintf(s1, "|  D  Download a G-file%s|", charstr(55, ' '));
+        s1 = StrCat("|  D  Download a G-file", std::string(55, ' '), "|");
       }
-      pla(s1, &abort);
+      bout.bpla(s1, &abort);
       bout.Color(0);
     }
   }
+  string s1;
   if (okansi()) {
-    sprintf(s1,
-            "|#7\xC0\xC4\xC4\xC4\xC4%s\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xC4\xC4\xC4\xD9",
-            s2, s3, times());
+    s1 = StringPrintf("|#7\xC0\xC4\xC4\xC4\xC4%s\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4%s|#1\xFE|#7\xC4|#2%s|#7\xC4|#1\xFE|#7\xC4\xC4\xC4\xC4\xD9",
+        s2.c_str(), s3.c_str(), t.c_str());
   } else {
-    sprintf(s1, "+----%s----------------%so-%s-o----+", s2, s3, times());
+    s1 = StringPrintf("+----%s----------------%so-%s-o----+",
+        s2.c_str(), s3.c_str(), t.c_str());
   }
-  pla(s1, &abort);
+  bout.bpla(s1, &abort);
   bout.Color(0);
   bout.nl();
 }
 
 void gfile_sec(int sn) {
   int i, i1, i2, nf;
-  char xdc[81], *ss, *ss1, szFileName[ MAX_PATH ];
   bool abort;
 
   gfilerec* g = read_sec(sn, &nf);
   if (g == nullptr) {
     return;
   }
-  strcpy(xdc, odc);
-  for (i = 0; i < 20; i++) {
-    odc[i] = 0;
-  }
+  std::set<char> odc;
   for (i = 1; i <= nf / 10; i++) {
-    odc[i - 1] = static_cast<char>(i + '0');
+    odc.insert(static_cast<char>(i + '0'));
   }
   list_gfiles(g, nf, sn);
   bool done = false;
-  while (!done && !hangup) {
-    session()->localIO()->tleft(true);
-    bout << "|#9Current G|#1-|#9File Section |#1: |#5" << gfilesec[sn].name << "|#0\r\n";
+  while (!done && !a()->hangup_) {
+    a()->tleft(true);
+    bout << "|#9Current G|#1-|#9File Section |#1: |#5" << a()->gfilesec[sn].name << "|#0\r\n";
     bout << "|#9Which G|#1-|#9File |#1(|#21|#1-|#2" << nf <<
                        "|#1), |#1(|#2Q|#1=|#9Quit|#1, |#2?|#1=|#9Relist|#1) : |#5";
-    ss = mmkey(2);
-    i = atoi(ss);
-    if (IsEquals(ss, "Q")) {
+    string ss = mmkey(odc);
+    i = to_number<int>(ss);
+    if (ss == "Q") {
       done = true;
-    } else if (IsEquals(ss, "E") && so()) {
+    } else if (ss == "E" && so()) {
       done = true;
       gfiles3(sn);
     }
-    if (IsEquals(ss, "A") && so()) {
+    if (ss == "A" && so()) {
       free(g);
       fill_sec(sn);
       g = read_sec(sn, &nf);
       if (g == nullptr) {
         return;
       }
-      for (i = 0; i < 20; i++) {
-        odc[i] = 0;
-      }
+      odc.clear();
       for (i = 1; i <= nf / 10; i++) {
-        odc[i - 1] = static_cast<char>(i + '0');
+        odc.insert(static_cast<char>(i + '0'));
       }
-    } else if (IsEquals(ss, "R") && so()) {
+    } else if (ss == "R" && so()) {
       bout.nl();
       bout << "|#2G-file number to delete? ";
-      ss1 = mmkey(2);
-      i = atoi(ss1);
+      string ss1 = mmkey(odc);
+      i = to_number<int>(ss1);
       if (i > 0 && i <= nf) {
         bout << "|#9Remove " << g[i - 1].description << "|#1? |#5";
         if (yesno()) {
           bout << "|#5Erase file too? ";
           if (yesno()) {
-            sprintf(szFileName, "%s%s%c%s", syscfg.gfilesdir,
-                    gfilesec[sn].filename, File::pathSeparatorChar, g[i - 1].filename);
-            File::Remove(szFileName);
+            string gfilesdir = a()->config()->gfilesdir();
+            auto file_name = FilePath(a()->gfilesec[sn].filename, g[i - 1].filename);
+            File::Remove(a()->config()->datadir(), file_name);
           }
           for (i1 = i; i1 < nf; i1++) {
             g[i1 - 1] = g[i1];
           }
           --nf;
-          sprintf(szFileName, "%s%s.gfl", syscfg.datadir, gfilesec[sn].filename);
-          File file(szFileName);
+          const auto file_name = StrCat(a()->gfilesec[sn].filename, ".gfl");
+          File file(FilePath(a()->config()->datadir(), file_name));
           file.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile | File::modeTruncate);
           file.Write(g, nf * sizeof(gfilerec));
           file.Close();
           bout << "\r\nDeleted.\r\n\n";
         }
       }
-    } else if (IsEquals(ss, "?")) {
+    } else if (ss == "?") {
       list_gfiles(g, nf, sn);
-    } else if (IsEquals(ss, "Q")) {
+    } else if (ss == "Q") {
       done = true;
     } else if (i > 0 && i <= nf) {
-      sprintf(szFileName, "%s%c%s", gfilesec[sn].filename, File::pathSeparatorChar, g[i - 1].filename);
-      i1 = printfile(szFileName);
-      session()->user()->SetNumGFilesRead(session()->user()->GetNumGFilesRead() + 1);
+      auto file_name = FilePath(a()->gfilesec[sn].filename, g[i - 1].filename);
+      i1 = printfile(file_name);
+      a()->user()->SetNumGFilesRead(a()->user()->GetNumGFilesRead() + 1);
       if (i1 == 0) {
-        sysoplogf("Read G-file '%s'", g[i - 1].filename);
+        sysoplog() << "Read G-file '" << g[i - 1].filename << "'";
       }
-    } else if (IsEquals(ss, "D")) {
+    } else if (ss == "D") {
       bool done1 = false;
-      while (!done1 && !hangup) {
+      while (!done1 && !a()->hangup_) {
         bout << "|#9Download which G|#1-|#9file |#1(|#2Q|#1=|#9Quit|#1, |#2?|#1=|#9Relist) : |#5";
-        ss = mmkey(2);
-        i2 = atoi(ss);
+        ss = mmkey(odc);
+        i2 = to_number<int>(ss);
         abort = false;
-        if (IsEquals(ss, "?")) {
+        if (ss == "?") {
           list_gfiles(g, nf, sn);
-          bout << "|#9Current G|#1-|#9File Section |#1: |#5" << gfilesec[sn].name << wwiv::endl;
-        } else if (IsEquals(ss, "Q")) {
+          bout << "|#9Current G|#1-|#9File Section |#1: |#5" << a()->gfilesec[sn].name << wwiv::endl;
+        } else if (ss == "Q") {
           list_gfiles(g, nf, sn);
           done1 = true;
         } else if (!abort) {
           if (i2 > 0 && i2 <= nf) {
-            sprintf(szFileName, "%s%s%c%s", syscfg.gfilesdir, gfilesec[sn].filename, File::pathSeparatorChar, g[i2 - 1].filename);
-            File file(szFileName);
+            auto file_name = FilePath(a()->gfilesec[sn].filename, g[i2 - 1].filename);
+            File file(FilePath(a()->config()->datadir(), file_name));
             if (!file.Open(File::modeReadOnly | File::modeBinary)) {
               bout << "|#6File not found : [" << file.full_pathname() << "]";
             } else {
-              long lFileSize = file.GetLength();
+              auto file_size = file.length();
               file.Close();
               bool sent = false;
               abort = false;
-              send_file(szFileName, &sent, &abort, g[i2 - 1].filename, -1, lFileSize);
-              char s1[ 255 ];
+              send_file(file_name.c_str(), &sent, &abort, g[i2 - 1].filename, -1, file_size);
+              char s1[255];
               if (sent) {
                 sprintf(s1, "|#2%s |#9successfully transferred|#1.|#0\r\n", g[i2 - 1].filename);
                 done1 = true;
@@ -451,7 +464,7 @@ void gfile_sec(int sn) {
               bout.nl();
               bout << s1;
               bout.nl();
-              sysoplog(s1);
+              sysoplog() << s1;
             }
           } else {
             done1 = true;
@@ -461,49 +474,47 @@ void gfile_sec(int sn) {
     }
   }
   free(g);
-  strcpy(odc, xdc);
 }
 
 void gfiles2() {
   write_inst(INST_LOC_GFILEEDIT, 0, INST_FLAGS_ONLINE);
-  sysoplog("@ Ran Gfile Edit");
+  sysoplog() << "@ Ran Gfile Edit";
   gfileedit();
   gfiles();
 }
 
 void gfiles3(int n) {
   write_inst(INST_LOC_GFILEEDIT, 0, INST_FLAGS_ONLINE);
-  sysoplog("@ Ran Gfile Edit");
+  sysoplog() << "@ Ran Gfile Edit";
   modify_sec(n);
   gfile_sec(n);
 }
 
 void gfiles() {
-  int* map = static_cast<int *>(BbsAllocA(session()->max_gfilesec * sizeof(int)));
-  WWIV_ASSERT(map);
+  int* map = static_cast<int *>(BbsAllocA(a()->max_gfilesec * sizeof(int)));
 
   bool done = false;
   int nmap = 0;
-  for (int i = 0; i < 20; i++) {
-    odc[i] = 0;
-  }
-  for (int i = 0; i < session()->num_sec; i++) {
+  int current_section = 0;
+  std::set<char> odc;
+  for (const auto& r : a()->gfilesec) {
     bool ok = true;
-    if (session()->user()->GetAge() < gfilesec[i].age) {
+    if (a()->user()->GetAge() < r.age) {
       ok = false;
     }
-    if (session()->GetEffectiveSl() < gfilesec[i].sl) {
+    if (a()->effective_sl() < r.sl) {
       ok = false;
     }
-    if (!session()->user()->HasArFlag(gfilesec[i].ar) && gfilesec[i].ar) {
+    if (!a()->user()->HasArFlag(r.ar) && r.ar) {
       ok = false;
     }
     if (ok) {
-      map[nmap++] = i;
+      map[nmap++] = current_section;
       if ((nmap % 10) == 0) {
-        odc[nmap / 10 - 1] = static_cast<char>('0' + (nmap / 10));
+        odc.insert(static_cast<char>('0' + (nmap / 10)));
       }
     }
+    current_section++;
   }
   if (nmap == 0) {
     bout << "\r\nNo G-file sections available.\r\n\n";
@@ -511,26 +522,26 @@ void gfiles() {
     return;
   }
   list_sec(map, nmap);
-  while (!done && !hangup) {
-    session()->localIO()->tleft(true);
+  while (!done && !a()->hangup_) {
+    a()->tleft(true);
     bout << "|#9G|#1-|#9Files Main Menu|#0\r\n";
     bout << "|#9Which Section |#1(|#21|#1-|#2" << nmap <<
                        "|#1), |#1(|#2Q|#1=|#9Quit|#1, |#2?|#1=|#9Relist|#1) : |#5";
-    char * ss = mmkey(2);
-    if (IsEquals(ss, "Q")) {
+    string ss = mmkey(odc);
+    if (ss == "Q") {
       done = true;
-    } else if (IsEquals(ss, "G") && so()) {
+    } else if (ss == "G" && so()) {
       done = true;
       gfiles2();
-    } else if (IsEquals(ss, "A") && cs()) {
+    } else if (ss == "A" && cs()) {
       bool bIsSectionFull = false;
       for (int i = 0; i < nmap && !bIsSectionFull; i++) {
         bout.nl();
-        bout << "Now loading files for " << gfilesec[map[i]].name << "\r\n\n";
+        bout << "Now loading files for " << a()->gfilesec[map[i]].name << "\r\n\n";
         bIsSectionFull = fill_sec(map[i]);
       }
     } else {
-      int i = atoi(ss);
+      int i = to_number<int>(ss);
       if (i > 0 && i <= nmap) {
         gfile_sec(map[i-1]);
       }

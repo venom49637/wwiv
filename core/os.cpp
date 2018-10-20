@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*               Copyright (C)2014-2015 WWIV Software Services            */
+/*                              WWIV Version 5.x                          */
+/*               Copyright (C)2014-2017, WWIV Software Services           */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -30,13 +30,13 @@
 
 using std::function;
 using std::string;
-using std::chrono::milliseconds;
+using namespace std::chrono;
 using namespace wwiv::strings;
 
 namespace wwiv {
 namespace os {
 
-bool wait_for(function<bool()> predicate, milliseconds d) {
+bool wait_for(function<bool()> predicate, duration<double> d) {
   auto now = std::chrono::steady_clock::now();
   auto end = now + d;
   while (!predicate() && now < end) {
@@ -65,15 +65,6 @@ int random_number(int max_value) {
   std::uniform_int_distribution<int> dist(0, max_value - 1);
   return dist(re);
 }
-
-std::string environment_variable(const std::string& variable_name) {
-  const char* s = getenv(variable_name.c_str());
-  if (s == nullptr) {
-    return "";
-  }
-  return string(s);
-}
-
 
 }  // namespace os
 }  // namespace wwiv

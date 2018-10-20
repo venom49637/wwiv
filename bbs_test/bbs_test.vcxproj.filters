@@ -34,10 +34,19 @@
     <ClCompile Include="bbs_test_main.cpp">
       <Filter>Helpers</Filter>
     </ClCompile>
-    <ClCompile Include="wuser_test.cpp">
+    <ClCompile Include="new_bbslist_test.cpp">
       <Filter>Tests</Filter>
     </ClCompile>
-    <ClCompile Include="new_bbslist_test.cpp">
+    <ClCompile Include="trashcan_test.cpp">
+      <Filter>Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="bputs_test.cpp">
+      <Filter>Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="makeansi_test.cpp">
+      <Filter>Tests</Filter>
+    </ClCompile>
+    <ClCompile Include="msgbase1_test.cpp">
       <Filter>Tests</Filter>
     </ClCompile>
   </ItemGroup>

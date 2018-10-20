@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*               Copyright (C)2014-2015 WWIV Software Services            */
+/*                              WWIV Version 5.x                          */
+/*               Copyright (C)2014-2017, WWIV Software Services           */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "file_helper.h"
+#include "core/file.h"
 #include "core/inifile.h"
 #include "core/strings.h"
 
@@ -76,79 +77,79 @@ protected:
 
 TEST_F(IniFileTest, Single_GetValue) {
   const string path = this->CreateIniFile("TEST", { "FOO=BAR" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_STREQ("BAR", ini.GetValue("FOO"));
+  EXPECT_EQ("BAR", ini.value<string>("FOO"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, Single_GetValue_Comment) {
   const string path = this->CreateIniFile("TEST", { "FOO=BAR  ; BAZ" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_STREQ("BAR", ini.GetValue("FOO"));
+  EXPECT_EQ("BAR", ini.value<string>("FOO"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, Single_GetNumericValue) {
   const string path = this->CreateIniFile("TEST", { "FOO=1234", "BAR=4321", "baz=12345" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_EQ(1234, ini.GetNumericValue<int>("FOO"));
-  EXPECT_EQ(4321, ini.GetNumericValue<int>("BAR"));
-  EXPECT_EQ(12345, ini.GetNumericValue<int>("baz"));
+  EXPECT_EQ(1234, ini.value<int>("FOO"));
+  EXPECT_EQ(4321, ini.value<int>("BAR"));
+  EXPECT_EQ(12345, ini.value<int>("baz"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, Single_GetBooleanValue) {
   const string path = this->CreateIniFile("TEST", { "T1=TRUE", "T2=1", "T3=Y", "F1=FALSE", "F2=0", "F3=N", "U=WTF" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_TRUE(ini.GetBooleanValue("T1"));
-  EXPECT_TRUE(ini.GetBooleanValue("T2"));
-  EXPECT_TRUE(ini.GetBooleanValue("T3"));
-  EXPECT_FALSE(ini.GetBooleanValue("F1"));
-  EXPECT_FALSE(ini.GetBooleanValue("F2"));
-  EXPECT_FALSE(ini.GetBooleanValue("F3"));
+  EXPECT_TRUE(ini.value<bool>("T1"));
+  EXPECT_TRUE(ini.value<bool>("T2"));
+  EXPECT_TRUE(ini.value<bool>("T3"));
+  EXPECT_FALSE(ini.value<bool>("F1"));
+  EXPECT_FALSE(ini.value<bool>("F2"));
+  EXPECT_FALSE(ini.value<bool>("F3"));
 
-  EXPECT_FALSE(ini.GetBooleanValue("U"));
+  EXPECT_FALSE(ini.value<bool>("U"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, Reopen_GetValue) {
   const string path = this->CreateIniFile("TEST", { "FOO=BAR" }, "TEST2", { "BAR=BAZ" } );
   {
-    IniFile ini(path, "TEST");
+    IniFile ini(path, {"TEST"});
     ASSERT_TRUE(ini.IsOpen());
-    EXPECT_STREQ("BAR", ini.GetValue("FOO"));
+    EXPECT_EQ("BAR", ini.value<string>("FOO"));
     ini.Close();
   }
 
-  IniFile ini(path, "TEST2");
-  EXPECT_STREQ("BAZ", ini.GetValue("BAR"));
+  IniFile ini(path, {"TEST2"});
+  EXPECT_EQ("BAZ", ini.value<string>("BAR"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, TwoSection_GetValue) {
   const string path = this->CreateIniFile("TEST", { "FOO=BAR" }, "TEST-1", { "FOO=BAZ" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST-1", "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST-1", "TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_STREQ("BAZ", ini.GetValue("FOO"));
+  EXPECT_EQ("BAZ", ini.value<string>("FOO"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, TwoSection_GetValue_OnlyInSecondary) {
   const string path = this->CreateIniFile("TEST", { "FOO=BAR" }, "TEST-1", { "FOO1=BAZ" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST-1", "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST-1", "TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_STREQ("BAR", ini.GetValue("FOO"));
+  EXPECT_EQ("BAR", ini.value<string>("FOO"));
   ini.Close();
 }
 
 TEST_F(IniFileTest, CommentAtStart) {
   const string path = this->CreateIniFile("TEST", { ";FOO=BAR" } );
-  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), "TEST-1", "TEST");
+  IniFile ini(FilePath(helper_.TempDir(), this->test_name()), {"TEST-1", "TEST"});
   ASSERT_TRUE(ini.IsOpen());
-  EXPECT_EQ(nullptr, ini.GetValue("FOO"));
+  EXPECT_EQ("", ini.value<string>("FOO"));
   ini.Close();
 }

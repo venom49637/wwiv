@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -28,17 +28,13 @@
 #define ATTACH_DIR "attach"
 #define ARCHIVER_DAT "archiver.dat"
 #define AUTO_MSG "auto.msg"
-
-#define ASV_HLP "asv.hlp"
 #define ASV_NOEXT "asv"
-#define ASV0_NOEXT "asv0"
-#define ASV1_NOEXT "asv1"
-#define ASV2_NOEXT "asv2"
-#define ASV3_NOEXT "asv3"
 
 #define BBSDATA_NET "bbsdata.net"
 #define BBSDATA_IND "bbsdata.ind"
 #define BBSDATA_REG "bbsdata.reg"
+#define BBSDATA_ROU "bbsdata.rou"
+#define BBSLIST_NET "bbslist.net"
 
 #define BBSLIST_MSG "bbslist.msg"
 #define BBSLIST_TMP "bbslist.tmp"
@@ -48,13 +44,8 @@
 
 #define CALLOUT_NET "callout.net"
 #define CATEG_NET "categ.net"
-#define CBV1_NOEXT "cbv1"
-#define CBV2_NOEXT "cbv2"
-#define CBV3_NOEXT "cbv3"
-#define CBV4_NOEXT "cbv4"
-#define CBV5_NOEXT "cbv5"
-#define CBV6_NOEXT "cbv6"
 #define CHAT_NOEXT "chat"
+#define DROPFILE_CHAIN_TXT "chain.txt"
 #define CHAINS_DAT "chains.dat"
 #define CHAINS_REG "chains.reg"
 #define CHAINS_NOEXT "chains"
@@ -64,11 +55,8 @@
 
 #define CMDPARAM_NOEXT "cmdparam"
 
-#define COLOR_DAT "color.dat"
-
 #define CONFIG_DAT "config.dat"
 #define CONFIG_OVR "config.ovr"
-#define CONFIG_USR "config.usr"
 
 #define COMMENT_TXT "comment.txt"
 #define CONNECT_NET "connect.net"
@@ -97,6 +85,7 @@
 
 #define FEDIT_INF "fedit.inf"
 #define FEEDBACK_NOEXT "feedback"
+#define FIDO_CALLOUT_JSON "fido_callout.json"
 #define FILESDL_NOEXT "filesdl"
 #define FILESUL_NOEXT "filesul"
 #define FILE_ID_DIZ "file_id.diz"
@@ -126,8 +115,9 @@
 #define LPSEARCH_NOEXT "lpsearch"
 #define LPSYSOP_NOEXT "lpsysop"
 
-#define MACROS_TXT "macros.txt"
 #define MBMAIN_NOEXT "mbmain"
+#define MBFSED_NOEXT "mbfsed"
+#define MBFSED_SYSOP_NOEXT "mbfsed-sysop"
 
 // QWK
 #define MESSAGES_DAT "MESSAGES.DAT"
@@ -135,6 +125,10 @@
 #define MENUWEL_NOEXT "menuwel"
 #define MEXTRACT_NOEXT "mextract"
 #define MMAIL_NOEXT "mmail"
+
+// FTN style message IDs
+#define MSGDUPE_DAT "msgdupe.dat"
+#define MSGID_DAT "msgid.dat"
 
 // Used by QBBS style editors.
 #define MSGINF "msginf"
@@ -144,6 +138,7 @@
 
 #define NAMES_LST "names.lst"
 #define NETWORKS_DAT "networks.dat"
+#define NETWORKS_JSON "networks.json"
 #define NEWUSER_NOEXT "newuser"
 #define NEWMAIL_MSG "newmail.msg"
 #define NEWSYSOP_MSG "newsysop.msg"
@@ -177,6 +172,7 @@
 #define SUEDIT_NOEXT "suedit"
 #define SUBS_CNF "subs.cnf"
 #define SUBS_DAT "subs.dat"
+#define SUBS_JSON "subs.json"
 #define SUBS_LST "subs.lst"
 #define SUBS_NOEXT "subs"
 #define SUBS_PUB "subs.pub"
@@ -189,6 +185,7 @@
 #define TARCHIVE_NOEXT "tarchive"
 #define TBATCH_NOEXT "tbatch"
 #define TEMP_ION "temp.ion"
+#define TITLE_FSED_NOEXT "title-fsed"
 #define TRASHCAN_TXT "trashcan.txt"
 #define TRY2UL_NOEXT "try2ul"
 #define TTAGGING_NOEXT "ttagging"

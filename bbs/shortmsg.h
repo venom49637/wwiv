@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,9 +18,29 @@
 #ifndef __INCLUDED_BBS_SHORTMSG_H__
 #define __INCLUDED_BBS_SHORTMSG_H__
 
-#include "bbs/wuser.h"
+#include <sstream>
 
-void rsm(int nUserNum, WUser * pUser, bool bAskToSaveMsgs);
-void ssm(int nUserNum, int nSystemNum, const char *pszFormat, ...);
+#include "sdk/net.h"
+#include "sdk/user.h"
 
-#endif  // __INCLUDED_BBS_SHORTMSG_H__
+class ssm {
+public:
+  explicit ssm(int un) : ssm(un, 0, nullptr) {}
+  ssm(int un, int sn, const net_networks_rec* net) : un_(un), sn_(sn), net_(net) {}
+  ~ssm();
+
+  template <typename T> ssm& operator<<(T const& value) {
+    stream_ << value;
+    return *this;
+  }
+
+private:
+  std::ostringstream stream_;
+  const int un_;
+  const int sn_{0};
+  const net_networks_rec* net_;
+};
+
+void rsm(int nUserNum, wwiv::sdk::User* pUser, bool bAskToSaveMsgs);
+
+#endif // __INCLUDED_BBS_SHORTMSG_H__

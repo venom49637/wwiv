@@ -1,3 +1,20 @@
+/**************************************************************************/
+/*                                                                        */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2015-2017, WWIV Software Services             */
+/*                                                                        */
+/*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
+/*    you may not use this  file  except in compliance with the License.  */
+/*    You may obtain a copy of the License at                             */
+/*                                                                        */
+/*                http://www.apache.org/licenses/LICENSE-2.0              */
+/*                                                                        */
+/*    Unless  required  by  applicable  law  or agreed to  in  writing,   */
+/*    software  distributed  under  the  License  is  distributed on an   */
+/*    "AS IS"  BASIS, WITHOUT  WARRANTIES  OR  CONDITIONS OF ANY  KIND,   */
+/*    either  express  or implied.  See  the  License for  the specific   */
+/*    language governing permissions and limitations under the License.   */
+/**************************************************************************/
 #include "networkb_test/fake_connection.h"
 
 #include <stdexcept>
@@ -16,15 +33,17 @@
 #endif  // _WIN32
 
 #include "core/os.h"
+#include "core/scope_exit.h"
 #include "core/strings.h"
 #include "networkb/binkp_commands.h"
-#include "networkb/socket_exceptions.h"
+#include "core/socket_exceptions.h"
 
-using std::chrono::milliseconds;
 using std::string;
+using std::make_unique;
 using std::unique_ptr;
-using wwiv::os::sleep_for;
-using wwiv::os::wait_for;
+using namespace std::chrono;
+using namespace wwiv::core;
+using namespace wwiv::os;
 using namespace wwiv::strings;
 using namespace wwiv::net;
 
@@ -61,7 +80,7 @@ std::string FakeBinkpPacket::debug_string() const {
 FakeConnection::FakeConnection() {}
 FakeConnection::~FakeConnection() {}
 
-uint16_t FakeConnection::read_uint16(std::chrono::milliseconds d) {
+uint16_t FakeConnection::read_uint16(std::chrono::duration<double> d) {
   auto predicate = [&]() { 
     std::lock_guard<std::mutex> lock(mu_);
     return !receive_queue_.empty();
@@ -78,7 +97,7 @@ uint16_t FakeConnection::read_uint16(std::chrono::milliseconds d) {
   return header;
 }
 
-uint8_t FakeConnection::read_uint8(std::chrono::milliseconds d) {
+uint8_t FakeConnection::read_uint8(std::chrono::duration<double> d) {
   auto predicate = [&]() { 
     std::lock_guard<std::mutex> lock(mu_);
     return !receive_queue_.empty();
@@ -95,8 +114,14 @@ uint8_t FakeConnection::read_uint8(std::chrono::milliseconds d) {
   return front.command();
 }
 
-int FakeConnection::receive(void* data, int size, std::chrono::milliseconds d) {
-  auto predicate = [&]() { 
+int FakeConnection::receive(void* data, int size, duration<double> d) {
+  string s = receive(size, d);
+  memcpy(data, s.data(), size);
+  return size;
+}
+
+string FakeConnection::receive(int, duration<double> d) {
+  auto predicate = [&]() {
     std::lock_guard<std::mutex> lock(mu_);
     return !receive_queue_.empty();
   };
@@ -105,16 +130,20 @@ int FakeConnection::receive(void* data, int size, std::chrono::milliseconds d) {
   }
 
   std::lock_guard<std::mutex> lock(mu_);
+  wwiv::core::ScopeExit on_exit([=] { receive_queue_.pop(); });
   const FakeBinkpPacket& front = receive_queue_.front();
-  memcpy(data, front.data().data(), size);
-  receive_queue_.pop();
-  return size;
+  return front.data();
 }
 
-int FakeConnection::send(const void* data, int size, std::chrono::milliseconds d) {
+int FakeConnection::send(const void* data, int size, std::chrono::duration<double>) {
   std::lock_guard<std::mutex> lock(mu_);
   send_queue_.push(FakeBinkpPacket(data, size));
   return size;
+}
+
+
+int FakeConnection::send(const std::string& s, std::chrono::duration<double> d) {
+  return send(s.data(), s.length(), d);
 }
 
 bool FakeConnection::has_sent_packets() const {

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015,WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,131 +17,28 @@
 /*                                                                        */
 /**************************************************************************/
 // Always declare wwiv_windows.h first to avoid collisions on defines.
-#include "bbs/wwiv_windows.h"
+#include "core/wwiv_windows.h"
+
+#include <cmath>
 
 #include "bbs/datetime.h"
-#include "bbs/wconstants.h"
-#include "bbs/wwiv.h"
+#include "local_io/wconstants.h"
+#include "core/datetime.h"
+#include "core/file.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
 
-char *dateFromTimeTForLog(time_t t) {
-  static char szDateString[11];
-  struct tm * pTm = localtime(&t);
-
-  snprintf(szDateString, sizeof(szDateString), "%02d%02d%02d", pTm->tm_year % 100, pTm->tm_mon + 1, pTm->tm_mday);
-  return szDateString;
-}
-
-// Only used by fix.
-char *dateFromTimeT(time_t t) {
-  static char szDateString[11];
-  struct tm * pTm = localtime(&t);
-
-  snprintf(szDateString, sizeof(szDateString), "%02d/%02d/%02d", pTm->tm_mon + 1, pTm->tm_mday, pTm->tm_year % 100);
-  return szDateString;
-}
-
-char *date() {
-  static char szDateString[11];
-  time_t t = time(nullptr);
-  struct tm * pTm = localtime(&t);
-
-  snprintf(szDateString, sizeof(szDateString), "%02d/%02d/%02d", pTm->tm_mon + 1, pTm->tm_mday, pTm->tm_year % 100);
-  return szDateString;
-}
-
-
-char *fulldate() {
-  static char szDateString[11];
-  time_t t = time(nullptr);
-  struct tm * pTm = localtime(&t);
-
-  snprintf(szDateString, sizeof(szDateString), "%02d/%02d/%4d", pTm->tm_mon + 1, pTm->tm_mday, pTm->tm_year + 1900);
-  return szDateString;
-}
-
-
-char *times() {
-  static char szTimeString[9];
-
-  time_t tim = time(nullptr);
-  struct tm *t = localtime(&tim);
-  snprintf(szTimeString, sizeof(szTimeString), "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
-  return szTimeString;
-}
-
+using std::string;
+using namespace std::chrono;
+using namespace wwiv::core;
 
 //
 // This kludge will get us through 2019 and should not interfere anywhere
 // else.
 //
 
-time_t date_to_daten(const char *datet) {
-  if (strlen(datet) != 8) {
-    return 0;
-  }
-
-  time_t t = time(nullptr);
-  struct tm * pTm = localtime(&t);
-  pTm->tm_mon   = atoi(datet) - 1;
-  pTm->tm_mday  = atoi(datet + 3);
-  // N.B. tm_year is years since 1900
-  pTm->tm_year  = atoi(datet + 6);         // fixed for 1920-2019
-  if (datet[6] < '2') {
-    pTm->tm_year += 100;
-  }
-  pTm->tm_hour = 0;
-  pTm->tm_min = 0;
-  pTm->tm_sec = 0;
-  pTm->tm_isdst = 0;  // Since this is used for arbitrary compare of date strings, this is ok.
-
-  return mktime(pTm);
-}
-
-
-/*
- * Returns the date a file was last modified as a string
- *
- * The following line would show the date that your BBS.EXE was last changed:
- * char date[81];
- * filedate("bbs.exe", &date);
- * bout.bputs("BBS was last modified on %s at %s\r\n", date,
- *     filetime("BBS.EXE"));
- *
- */
-void filedate(const char *pszFileName, char *pszReturnValue) {
-  File file(pszFileName);
-  if (!file.Exists() && !file.Open(File::modeReadOnly)) {
-    return;
-  }
-  time_t tFileDate = file.last_write_time();
-  struct tm *pTm = localtime(&tFileDate);
-
-  // We use 9 here since that is the size of the date format MM/DD/YY + nullptr
-  snprintf(pszReturnValue, 9, "%02d/%02d/%02d", pTm->tm_mon, pTm->tm_mday, (pTm->tm_year % 100));
-}
-
-
-/* This function returns the time, in seconds since midnight. */
-double timer() {
-  time_t ti       = time(nullptr);
-  struct tm *t    = localtime(&ti);
-
-  return static_cast<double>(t->tm_hour * SECONDS_PER_HOUR_FLOAT) +
-         static_cast<double>(t->tm_min * SECONDS_PER_MINUTE_FLOAT) +
-         static_cast<double>(t->tm_sec);
-}
-
-/* This function returns the time, in ticks since midnight. */
-long timer1() {
-  static const double TICKS_PER_SECOND = 18.2;
-  return static_cast<long>(timer() * TICKS_PER_SECOND);
-}
-
-
 void ToggleScrollLockKey() {
-#if defined( _WIN32 )
+#if defined(_WIN32)
   // Simulate a key press
   keybd_event(VK_SCROLL, 0x45, KEYEVENTF_EXTENDEDKEY | 0, 0);
   // Simulate a key release
@@ -149,117 +46,45 @@ void ToggleScrollLockKey() {
 #endif // _WIN32
 }
 
-
 /* This function returns the status of scoll lock.  If scroll lock is active
  * (ie, the user has hit scroll lock + the light is lit if there is a
  * scoll lock LED), the sysop is assumed to be available.
  */
 bool sysop1() {
-#if defined (_WIN32)
+#if defined(_WIN32)
   return (GetKeyState(VK_SCROLL) & 0x1);
 #else
   return false;
 #endif
 }
 
-
-bool isleap(int nYear) {
-  WWIV_ASSERT(nYear >= 0);
-  return nYear % 400 == 0 || (nYear % 4 == 0 && nYear % 100 != 0);
-}
-
-/* returns day of week, 0=Sun, 6=Sat */
-int dow() {
-  time_t long_time = time(nullptr);  // Get time as long integer.
-  struct tm* newtime = localtime(&long_time);  // Convert to local time.
-  return newtime->tm_wday;
+bool isleap(int year) {
+  WWIV_ASSERT(year >= 0);
+  return year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
 }
 
 /*
  * Returns current time as string formatted like HH:MM:SS (01:13:00).
  */
-char *ctim(double d) {
-  static char szCurrentTime[10];
-
+std::string ctim(long d) {
   if (d < 0) {
-    d += HOURS_PER_DAY_FLOAT * SECONDS_PER_HOUR_FLOAT;
+    d += SECONDS_PER_DAY;
   }
-  long lHour = static_cast<long>(d / SECONDS_PER_HOUR_FLOAT);
-  d -= static_cast<double>(lHour * HOURS_PER_DAY);
-  long lMinute = static_cast<long>(d / MINUTES_PER_HOUR_FLOAT);
-  d -= static_cast<double>(lMinute * MINUTES_PER_HOUR);
-  long lSecond = static_cast<long>(d);
-  snprintf(szCurrentTime, sizeof(szCurrentTime), "%2.2ld:%2.2ld:%2.2ld", lHour, lMinute, lSecond);
-
-  return szCurrentTime;
+  auto hour = (d / SECONDS_PER_HOUR);
+  d -= (hour * SECONDS_PER_HOUR);
+  auto minute = static_cast<long>(d / MINUTES_PER_HOUR);
+  d -= (minute * MINUTES_PER_HOUR);
+  auto second = static_cast<long>(d);
+  return wwiv::strings::StringPrintf("%2.2ld:%2.2ld:%2.2ld", hour, minute, second);
 }
 
-/*
-* Returns current time as string formatted as HH hours, MM minutes, SS seconds
-*/
-std::string ctim2(double d) {
-  char szHours[20], szMinutes[20], szSeconds[20];
-
-  long h = static_cast<long>(d / SECONDS_PER_HOUR_FLOAT);
-  d -= static_cast<double>(h * SECONDS_PER_HOUR);
-  long m = static_cast<long>(d / SECONDS_PER_MINUTE_FLOAT);
-  d -= static_cast<double>(m * SECONDS_PER_MINUTE);
-  long s = static_cast<long>(d);
-
-  if (h == 0) {
-    strcpy(szHours, "");
-  } else {
-    snprintf(szHours, sizeof(szHours), "|#1%ld |#9%s", h, (h > 1) ? "hours" : "hour");
-  }
-  if (m == 0) {
-    strcpy(szMinutes, "");
-  } else {
-    snprintf(szMinutes, sizeof(szMinutes), "|#1%ld |#9%s", m, (m > 1) ? "minutes" : "minute");
-  }
-  if (s == 0) {
-    strcpy(szSeconds, "");
-  } else {
-    snprintf(szSeconds, sizeof(szSeconds), "|#1%ld |#9%s", s, (s > 1) ? "seconds" : "second");
-  }
-
-  std::string result;
-  if (h == 0) {
-    if (m == 0) {
-      if (s == 0) {
-        result = " ";
-      } else {
-        result = szSeconds;
-      }
-    } else {
-      result = szMinutes;
-      if (s != 0) {
-        result += ", ";
-        result += szSeconds;
-      }
-    }
-  } else {
-    result = szHours;
-    if (m == 0) {
-      if (s != 0) {
-        result += ", ";
-        result += szSeconds;
-      }
-    } else {
-      result += ", ";
-      result += szMinutes;
-      if (s != 0) {
-        result += ", ";
-        result += szSeconds;
-      }
-    }
-  }
-  return result;
+std::string ctim(std::chrono::duration<double> d) {
+  return ctim(static_cast<long>(std::chrono::duration_cast<seconds>(d).count()));
 }
-
 
 int years_old(int nMonth, int nDay, int nYear) {
-  time_t t = time(nullptr);
-  struct tm * pTm = localtime(&t);
+  auto t = time_t_now();
+  struct tm* pTm = localtime(&t);
   nYear = nYear - 1900;
   --nMonth; // Reduce by one because tm_mon is 0-11, not 1-12
 
@@ -288,4 +113,29 @@ int years_old(int nMonth, int nDay, int nYear) {
   return nAge;
 }
 
+system_clock::duration duration_since_midnight(system_clock::time_point now) {
+  auto tnow = system_clock::to_time_t(now);
+  tm* date = std::localtime(&tnow);
+  date->tm_hour = 0;
+  date->tm_min = 0;
+  date->tm_sec = 0;
+  auto midnight = system_clock::from_time_t(std::mktime(date));
 
+  return now - midnight;
+}
+
+system_clock::time_point minutes_after_midnight(int minutes) {
+  const auto tnow = time_t_now();
+  tm* date = std::localtime(&tnow);
+  date->tm_hour = minutes / 60;
+  date->tm_min = minutes % 60;
+  date->tm_sec = 0;
+
+  auto t = system_clock::from_time_t(std::mktime(date));
+  return t;
+}
+
+int minutes_since_midnight() {
+  auto d = duration_since_midnight(system_clock::now());
+  return duration_cast<minutes>(d).count();
+}

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,34 +23,35 @@
 void zap_ed_info();
 void get_ed_info();
 unsigned long bytes_to_k(unsigned long lBytes);
-int  check_batch_queue(const char *pszFileName);
-bool check_ul_event(int nDirectoryNum, uploadsrec * pUploadRecord);
+int  check_batch_queue(const char *file_name);
+bool check_ul_event(int directory_num, uploadsrec * upload_record);
 bool okfn(const std::string& fileName);
 void print_devices();
-void get_arc_cmd(char *pszOutBuffer, const char *pszArcFileName, int cmd, const char *ofn);
-int  list_arc_out(const char *pszFileName, const char *pszDirectory);
+void get_arc_cmd(char *out_buffer, const char *pszArcFileName, int cmd, const char *ofn);
+int  list_arc_out(const char *file_name, const char *pszDirectory);
 bool ratio_ok();
 bool dcs();
-void dliscan1(int nDirectoryNum);
-void dliscan_hash(int nDirectoryNum);
+void dliscan1(int directory_num);
 void dliscan();
-void add_extended_description(const char *pszFileName, const char *pszDescription);
-void delete_extended_description(const char *pszFileName);
-char *read_extended_description(const char *pszFileName);
-void print_extended(const char *pszFileName, bool *abort, int numlist, int indent);
-void align(char *pszFileName);
-bool compare(const char *pszFileName1, const char *pszFileName2);
-void printinfo(uploadsrec * pUploadRecord, bool *abort);
+void add_extended_description(const std::string& file_name, const std::string& description);
+void delete_extended_description(const std::string&file_name);
+std::string read_extended_description(const std::string& file_name);
+void print_extended(const char *file_name, bool *abort, int numlist, int indent);
+void align(char *file_name);
+void align(std::string* file_name);
+std::string aligns(const std::string& file_name);
+bool compare(const char* pszFileName1, const char* pszFileName2);
+void printinfo(uploadsrec * upload_record, bool *abort);
 void printtitle(bool *abort);
-void file_mask(char *pszFileMask);
+std::string file_mask();
 void listfiles();
-void nscandir(int nDirNum, bool *abort);
+void nscandir(uint16_t nDirNum, bool& need_title, bool *abort);
 void nscanall();
 void searchall();
-int  recno(const char *pszFileMask);
-int  nrecno(const char *pszFileMask, int nStartingRec);
-int  printfileinfo(uploadsrec * pUploadRecord, int nDirectoryNum);
-void remlist(const char *pszFileName);
-int  FileAreaSetRecord(File &file, int nRecordNumber);
+int  recno(const std::string& file_mask);
+int  nrecno(const std::string& file_mask, int nStartingRec);
+int  printfileinfo(uploadsrec* upload_record, int directory_num);
+void remlist(const char *file_name);
+int FileAreaSetRecord(wwiv::core::File& file, int nRecordNumber);
 
 #endif  // __INCLUDED_BBS_XFER_H__

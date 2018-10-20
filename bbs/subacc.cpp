@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,108 +16,127 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/subacc.h"
+
 #include <memory>
 #include <string>
 
+#include "bbs/application.h"
 #include "bbs/bbs.h"
-#include "bbs/bbsutl.h"
 #include "bbs/connect1.h"
-#include "bbs/msgbase.h"
-#include "bbs/subxtr.h"
-#include "bbs/pause.h"
-#include "sdk/vardec.h"
-#include "bbs/vars.h"
-#include "bbs/woutstreambuffer.h"
-#include "bbs/wsession.h"
-#include "bbs/wstatus.h"
-#include "core/strings.h"
+#include "bbs/email.h"
+#include "bbs/message_file.h"
+#include "bbs/output.h"
+
 #include "core/file.h"
+#include "core/scope_exit.h"
+#include "core/stl.h"
+#include "core/strings.h"
+#include "core/version.h"
 #include "core/wwivassert.h"
 #include "core/wwivport.h"
+#include "core/datetime.h"
+#include "sdk/status.h"
+#include "sdk/subxtr.h"
+#include "sdk/vardec.h"
 
-#ifndef MAX_TO_CACHE
-#define MAX_TO_CACHE 15                     // max postrecs to hold in cache
-#endif
+using std::string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
+using namespace wwiv::strings;
 
-static postrec *cache;                      // points to sub cache memory
-static bool believe_cache;                  // true if cache is valid
-static int cache_start;                     // starting msgnum of cache
-static int last_msgnum;                     // last msgnum read
-static File fileSub;                       // File object for '.sub' file
-static char subdat_fn[MAX_PATH];            // filename of .sub file
+/////////////////////////////////////////////////////////////////////////////
+//
+// NOTE: This file containts wwiv message base specific code and should
+// move to SDK.
+//
+
+static std::unique_ptr<File> fileSub; // File object for '.sub' file
+static char subdat_fn[MAX_PATH];      // filename of .sub file
 
 using std::unique_ptr;
-using wwiv::bbs::TempDisablePause;
+using namespace wwiv::core;
+using namespace wwiv::stl;
+using namespace wwiv::strings;
 
 void close_sub() {
-  if (fileSub.IsOpen()) {
-    fileSub.Close();
+  if (fileSub) {
+    fileSub.reset();
   }
 }
 
 bool open_sub(bool wr) {
-  close_sub();
-
+  fileSub.reset(new File(subdat_fn));
   if (wr) {
-    fileSub.SetName(subdat_fn);
-    fileSub.Open(File::modeBinary | File::modeCreateFile | File::modeReadWrite);
-    if (fileSub.IsOpen()) {
+    fileSub->Open(File::modeBinary | File::modeCreateFile | File::modeReadWrite);
+    if (fileSub->IsOpen()) {
       // re-read info from file, to be safe
-      believe_cache = false;
-      fileSub.Seek(0L, File::seekBegin);
-      postrec p;
-      fileSub.Read(&p, sizeof(postrec));
-      session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
+      fileSub->Seek(0L, File::Whence::begin);
+      postrec p{};
+      fileSub->Read(&p, sizeof(postrec));
+      a()->SetNumMessagesInCurrentMessageArea(p.owneruser);
     }
   } else {
-    fileSub.SetName(subdat_fn);
-    fileSub.Open(File::modeReadOnly | File::modeBinary);
+    fileSub->Open(File::modeReadOnly | File::modeBinary);
   }
 
-  return fileSub.IsOpen();
+  return fileSub->IsOpen();
 }
 
-// Initializes use of a sub value (subboards[], not usub[]).  If quick, then
-// don't worry about anything detailed, just grab qscan info.
-bool iscan1(int si, bool quick) {
-  postrec p;
+uint32_t WWIVReadLastRead(int sub_number) {
+  // open file, and create it if necessary
+  postrec p{};
 
-  // make sure we have cache space
-  if (!cache) {
-    cache = static_cast<postrec *>(malloc(MAX_TO_CACHE * sizeof(postrec)));
-    if (!cache) {
-      return false;
+  File subFile(
+      FilePath(a()->config()->datadir(), StrCat(a()->subs().sub(sub_number).filename, ".sub")));
+  if (!subFile.Exists()) {
+    bool created = subFile.Open(File::modeBinary | File::modeCreateFile | File::modeReadWrite);
+    if (!created) {
+      return 0;
     }
+    p.owneruser = 0;
+    subFile.Write(&p, sizeof(postrec));
+    return 1;
   }
+
+  if (!subFile.Open(File::modeBinary | File::modeReadOnly)) {
+    return 0;
+  }
+  // read in first rec, specifying # posts
+  // p.owneruser contains # of posts.
+  subFile.Read(&p, sizeof(postrec));
+
+  if (p.owneruser == 0) {
+    // Not sure why but iscan1 returned 1 for empty subs.
+    return 1;
+  }
+
+  // read in sub date, if don't already know it
+  subFile.Seek(p.owneruser * sizeof(postrec), File::Whence::begin);
+  subFile.Read(&p, sizeof(postrec));
+  return p.qscan;
+}
+
+// Initializes use of a sub value (a()->subs().subs()[], not a()->usub[]).  If quick, then
+// don't worry about anything detailed, just grab qscan info.
+bool iscan1(int sub_index) {
+  postrec p{};
+
   // forget it if an invalid sub #
-  if (si < 0 || si >= session()->num_subs) {
+  if (sub_index < 0 || sub_index >= size_int(a()->subs().subs())) {
     return false;
   }
 
-  // skip this stuff if being called from the WFC cache code
-  if (!quick) {
-    // go to correct net #
-    if (xsubs[si].num_nets) {
-      set_net_num(xsubs[si].nets[0].net_num);
-    } else {
-      set_net_num(0);
-    }
-    // see if a sub has changed
-    application()->GetStatusManager()->RefreshStatusCache();
-    if (session()->subchg) {
-      session()->SetCurrentReadMessageArea(-1);
-    }
-
-    // if already have this one set, nothing more to do
-    if (si == session()->GetCurrentReadMessageArea()) {
-      return true;
-    }
+  // go to correct net #
+  if (!a()->subs().sub(sub_index).nets.empty()) {
+    set_net_num(a()->subs().sub(sub_index).nets[0].net_num);
+  } else {
+    set_net_num(0);
   }
-  // sub cache no longer valid
-  believe_cache = false;
 
   // set sub filename
-  snprintf(subdat_fn, sizeof(subdat_fn), "%s%s.sub", syscfg.datadir, subboards[si].filename);
+  const auto subfn = StrCat(a()->subs().sub(sub_index).filename, ".sub");
+  to_char_array(subdat_fn, FilePath(a()->config()->datadir(), subfn));
 
   // open file, and create it if necessary
   if (!File::Exists(subdat_fn)) {
@@ -125,31 +144,22 @@ bool iscan1(int si, bool quick) {
       return false;
     }
     p.owneruser = 0;
-    fileSub.Write(&p, sizeof(postrec));
+    fileSub->Write(&p, sizeof(postrec));
   } else if (!open_sub(false)) {
     return false;
   }
 
   // set sub
-  session()->SetCurrentReadMessageArea(si);
-  session()->subchg = 0;
-  last_msgnum = 0;
+  a()->SetCurrentReadMessageArea(sub_index);
+  a()->subchg = 0;
 
   // read in first rec, specifying # posts
-  fileSub.Seek(0L, File::seekBegin);
-  fileSub.Read(&p, sizeof(postrec));
-  session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
+  fileSub->Seek(0L, File::Whence::begin);
+  fileSub->Read(&p, sizeof(postrec));
+  a()->SetNumMessagesInCurrentMessageArea(p.owneruser);
 
-  // read in sub date, if don't already know it
-  if (session()->m_SubDateCache[si] == 0) {
-    if (session()->GetNumMessagesInCurrentMessageArea()) {
-      fileSub.Seek(session()->GetNumMessagesInCurrentMessageArea() * sizeof(postrec), File::seekBegin);
-      fileSub.Read(&p, sizeof(postrec));
-      session()->m_SubDateCache[si] = p.qscan;
-    } else {
-      session()->m_SubDateCache[si] = 1;
-    }
-  }
+  // We used to read in sub date, if don't already know it
+  // Not callers should use WWIVReadLastRead to get it.
 
   // close file
   close_sub();
@@ -158,221 +168,151 @@ bool iscan1(int si, bool quick) {
   return true;
 }
 
-// Initializes use of a sub (usub[] value, not subboards[] value).
-int iscan(int b) {
-  return iscan1(usub[b].subnum, false);
-}
+// Initializes use of a sub (a()->usub[] value, not a()->subs().subs()[] value).
+int iscan(int b) { return iscan1(a()->usub[b].subnum); }
 
-// Returns info for a post.  Maintains a cache.  Does not correct anything
-// if the sub has changed.
-postrec *get_post(int mn) {
-  postrec p;
-  bool bCloseSubFile = false;
-
-  if (mn == 0) {
+// Returns info for a post.
+postrec* get_post(int mn) {
+  if (mn < 1) {
     return nullptr;
   }
-
-  if (session()->subchg == 1) {
-    // sub has changed (detected in application()->GetStatusManager()->Read); invalidate cache
-    believe_cache = false;
-
-    // kludge: subchg==2 leaves subchg indicating change, but the '2' value
-    // indicates, to this routine, that it has been handled at this level
-    session()->subchg = 2;
+  if (mn > a()->GetNumMessagesInCurrentMessageArea()) {
+    mn = a()->GetNumMessagesInCurrentMessageArea();
   }
-  // see if we need new cache info
-  if (!believe_cache ||
-      mn < cache_start ||
-      mn >= (cache_start + MAX_TO_CACHE)) {
-    if (!fileSub.IsOpen()) {
-      // open the sub data file, if necessary
-      if (!open_sub(false)) {
-        return nullptr;
-      }
-      bCloseSubFile = true;
+  bool need_close = false;
+  if (!fileSub) {
+    if (!open_sub(false)) {
+      return nullptr;
     }
-
-    // re-read # msgs, if needed
-    if (session()->subchg == 2) {
-      fileSub.Seek(0L, File::seekBegin);
-      fileSub.Read(&p, sizeof(postrec));
-      session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
-
-      // another kludge: subchg==3 indicates we have re-read # msgs also
-      // only used so we don't do this every time through
-      session()->subchg = 3;
-
-      // adjust msgnum, if it is no longer valid
-      if (mn > session()->GetNumMessagesInCurrentMessageArea()) {
-        mn = session()->GetNumMessagesInCurrentMessageArea();
-      }
-    }
-    // select new starting point of cache
-    if (mn >= last_msgnum) {
-      // going forward
-      if (session()->GetNumMessagesInCurrentMessageArea() <= MAX_TO_CACHE) {
-        cache_start = 1;
-      } else if (mn > (session()->GetNumMessagesInCurrentMessageArea() - MAX_TO_CACHE)) {
-        cache_start = session()->GetNumMessagesInCurrentMessageArea() - MAX_TO_CACHE + 1;
-      } else {
-        cache_start = mn;
-      }
-    } else {
-      // going backward
-      if (mn > MAX_TO_CACHE) {
-        cache_start = mn - MAX_TO_CACHE + 1;
-      } else {
-        cache_start = 1;
-      }
-    }
-
-    if (cache_start < 1) {
-      cache_start = 1;
-    }
-
-    // read in some sub info
-    fileSub.Seek(cache_start * sizeof(postrec), File::seekBegin);
-    fileSub.Read(cache, MAX_TO_CACHE * sizeof(postrec));
-
-    // now, close the file, if necessary
-    if (bCloseSubFile) {
-      close_sub();
-    }
-    // cache is now valid
-    believe_cache = true;
+    need_close = true;
   }
-  // error if msg # invalid
-  if (mn < 1 || mn > session()->GetNumMessagesInCurrentMessageArea()) {
-    return nullptr;
+  // read in post
+  static postrec p;
+  fileSub->Seek(mn * sizeof(postrec), File::Whence::begin);
+  fileSub->Read(&p, sizeof(postrec));
+
+  if (need_close) {
+    close_sub();
   }
-  last_msgnum = mn;
-  return (cache + (mn - cache_start));
+  return &p;
 }
 
-void write_post(int mn, postrec * pp) {
-  if (fileSub.IsOpen()) {
-    fileSub.Seek(mn * sizeof(postrec), File::seekBegin);
-    fileSub.Write(pp, sizeof(postrec));
-    if (believe_cache) {
-      if (mn >= cache_start && mn < (cache_start + MAX_TO_CACHE)) {
-        postrec* p1 = cache + (mn - cache_start);
-        if (p1 != pp) {
-          *p1 = *pp;
-        }
-      }
-    }
+void write_post(int mn, postrec* pp) {
+  if (!fileSub || !fileSub->IsOpen()) {
+    return;
   }
+  fileSub->Seek(mn * sizeof(postrec), File::Whence::begin);
+  fileSub->Write(pp, sizeof(postrec));
 }
 
-void add_post(postrec * pp) {
-  bool bCloseSubFile = false;
+void add_post(postrec* pp) {
+  bool need_close = false;
 
   // open the sub, if necessary
-
-  if (!fileSub.IsOpen()) {
+  if (!fileSub) {
     open_sub(true);
-    bCloseSubFile = true;
+    need_close = true;
   }
-  if (fileSub.IsOpen()) {
-    // get updated info
-    application()->GetStatusManager()->RefreshStatusCache();
-    fileSub.Seek(0L, File::seekBegin);
-    postrec p;
-    fileSub.Read(&p, sizeof(postrec));
-
-    // one more post
-    p.owneruser++;
-    session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
-    fileSub.Seek(0L, File::seekBegin);
-    fileSub.Write(&p, sizeof(postrec));
-
-    // add the new post
-    fileSub.Seek(session()->GetNumMessagesInCurrentMessageArea() * sizeof(postrec), File::seekBegin);
-    fileSub.Write(pp, sizeof(postrec));
-
-    // we've modified the sub
-    believe_cache = false;
-    session()->subchg = 0;
-    session()->m_SubDateCache[session()->GetCurrentReadMessageArea()] = pp->qscan;
+  if (!fileSub || !fileSub->IsOpen()) {
+    return;
   }
-  if (bCloseSubFile) {
+  // get updated info
+  a()->status_manager()->RefreshStatusCache();
+  fileSub->Seek(0L, File::Whence::begin);
+  subfile_header_t p{};
+  fileSub->Read(&p, sizeof(subfile_header_t));
+
+  if (strncmp(p.signature, "WWIV\x1A", 5) != 0) {
+    auto saved_count = p.active_message_count;
+    memset(&p, 0, sizeof(subfile_header_t));
+    // We don't have a modern header.
+    strcpy(p.signature, "WWIV\x1A");
+    p.active_message_count = saved_count;
+    p.revision = 1;
+    p.wwiv_version = wwiv_num_version;
+    p.daten_created = time_t_now();
+  }
+
+  // one more post
+  p.active_message_count++;
+  p.mod_count++;
+  a()->SetNumMessagesInCurrentMessageArea(p.active_message_count);
+  fileSub->Seek(0L, File::Whence::begin);
+  fileSub->Write(&p, sizeof(postrec));
+
+  // add the new post
+  fileSub->Seek(a()->GetNumMessagesInCurrentMessageArea() * sizeof(postrec), File::Whence::begin);
+  fileSub->Write(pp, sizeof(postrec));
+
+  // we've modified the sub
+  a()->subchg = 0;
+
+  if (need_close) {
     close_sub();
   }
 }
 
-#define BUFSIZE 32000
+static constexpr size_t BUFSIZE = 32000;
 
 void delete_message(int mn) {
-  bool bCloseSubFile = false;
+  bool need_close = false;
 
   // open file, if needed
-  if (!fileSub.IsOpen()) {
+  if (!fileSub || !fileSub->IsOpen()) {
     open_sub(true);
-    bCloseSubFile = true;
+    need_close = true;
   }
   // see if anything changed
-  application()->GetStatusManager()->RefreshStatusCache();
+  a()->status_manager()->RefreshStatusCache();
 
-  if (fileSub.IsOpen()) {
-    if (mn > 0 && mn <= session()->GetNumMessagesInCurrentMessageArea()) {
-      char *pBuffer = static_cast<char *>(malloc(BUFSIZE));
-      if (pBuffer) {
-        postrec *p1 = get_post(mn);
-        remove_link(&(p1->msg), subboards[session()->GetCurrentReadMessageArea()].filename);
+  if (fileSub) {
+    if (mn > 0 && mn <= a()->GetNumMessagesInCurrentMessageArea()) {
+      char* buffer = static_cast<char*>(malloc(BUFSIZE));
+      if (buffer) {
+        postrec* p1 = get_post(mn);
+        remove_link(&(p1->msg), a()->current_sub().filename);
 
-        long cp = static_cast<long>(mn + 1) * sizeof(postrec);
-        long len = static_cast<long>(session()->GetNumMessagesInCurrentMessageArea() + 1) * sizeof(postrec);
+        auto cp = static_cast<long>(mn + 1) * sizeof(postrec);
+        auto len = static_cast<long>(a()->GetNumMessagesInCurrentMessageArea() + 1) * sizeof(postrec);
 
         unsigned int nb = 0;
         do {
           long l = len - cp;
           nb = (l < BUFSIZE) ? static_cast<int>(l) : BUFSIZE;
           if (nb) {
-            fileSub.Seek(cp, File::seekBegin);
-            fileSub.Read(pBuffer, nb);
-            fileSub.Seek(cp - sizeof(postrec), File::seekBegin);
-            fileSub.Write(pBuffer, nb);
+            fileSub->Seek(cp, File::Whence::begin);
+            fileSub->Read(buffer, nb);
+            fileSub->Seek(cp - sizeof(postrec), File::Whence::begin);
+            fileSub->Write(buffer, nb);
             cp += nb;
           }
         } while (nb == BUFSIZE);
 
         // update # msgs
         postrec p;
-        fileSub.Seek(0L, File::seekBegin);
-        fileSub.Read(&p, sizeof(postrec));
+        fileSub->Seek(0L, File::Whence::begin);
+        fileSub->Read(&p, sizeof(postrec));
         p.owneruser--;
-        session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
-        fileSub.Seek(0L, File::seekBegin);
-        fileSub.Write(&p, sizeof(postrec));
-
-        // cache is now invalid
-        believe_cache = false;
-
-        free(pBuffer);
+        a()->SetNumMessagesInCurrentMessageArea(p.owneruser);
+        fileSub->Seek(0L, File::Whence::begin);
+        fileSub->Write(&p, sizeof(postrec));
+        free(buffer);
       }
     }
   }
   // close file, if needed
-  if (bCloseSubFile) {
+  if (need_close) {
     close_sub();
   }
 }
 
-static bool IsSamePost(postrec * p1, postrec * p2) {
-  if (p1 &&
-      p2 &&
-      p1->daten == p2->daten &&
-      p1->qscan == p2->qscan &&
-      p1->ownersys == p2->ownersys &&
-      p1->owneruser == p2->owneruser &&
-      wwiv::strings::IsEquals(p1->title, p2->title)) {
-    return true;
-  }
-  return false;
+static bool IsSamePost(postrec* p1, postrec* p2) {
+  return p1 && p2 && p1->daten == p2->daten && p1->qscan == p2->qscan &&
+         p1->ownersys == p2->ownersys && p1->owneruser == p2->owneruser &&
+         wwiv::strings::IsEquals(p1->title, p2->title);
 }
 
-void resynch(int *msgnum, postrec * pp) {
+void resynch(int* msgnum, postrec* pp) {
   postrec p, *pp1;
   if (pp) {
     p = *pp;
@@ -384,15 +324,15 @@ void resynch(int *msgnum, postrec * pp) {
     p = *pp1;
   }
 
-  application()->GetStatusManager()->RefreshStatusCache();
+  a()->status_manager()->RefreshStatusCache();
 
-  if (session()->subchg || pp) {
+  if (a()->subchg || pp) {
     pp1 = get_post(*msgnum);
     if (IsSamePost(pp1, &p)) {
       return;
     } else if (!pp1 || (p.qscan < pp1->qscan)) {
-      if (*msgnum > session()->GetNumMessagesInCurrentMessageArea()) {
-        *msgnum = session()->GetNumMessagesInCurrentMessageArea() + 1;
+      if (*msgnum > a()->GetNumMessagesInCurrentMessageArea()) {
+        *msgnum = a()->GetNumMessagesInCurrentMessageArea() + 1;
       }
       for (int i = *msgnum - 1; i > 0; i--) {
         pp1 = get_post(i);
@@ -403,72 +343,14 @@ void resynch(int *msgnum, postrec * pp) {
       }
       *msgnum = 0;
     } else {
-      for (int i = *msgnum + 1; i <= session()->GetNumMessagesInCurrentMessageArea(); i++) {
+      for (int i = *msgnum + 1; i <= a()->GetNumMessagesInCurrentMessageArea(); i++) {
         pp1 = get_post(i);
         if (IsSamePost(&p, pp1) || (p.qscan <= pp1->qscan)) {
           *msgnum = i;
           return;
         }
       }
-      *msgnum = session()->GetNumMessagesInCurrentMessageArea();
-    }
-  }
-}
-
-void pack_sub(int si) {
-  if (iscan1(si, false)) {
-    if (open_sub(true) && subboards[si].storage_type == 2) {
-      const char *sfn = subboards[si].filename;
-      const char *nfn = "PACKTMP$";
-
-      char fn1[MAX_PATH], fn2[MAX_PATH];
-      sprintf(fn1, "%s%s.dat", syscfg.msgsdir, sfn);
-      sprintf(fn2, "%s%s.dat", syscfg.msgsdir, nfn);
-
-      bout << "\r\n|#7\xFE |#1Packing Message Area: |#5" << subboards[si].name << wwiv::endl;
-
-      for (int i = 1; i <= session()->GetNumMessagesInCurrentMessageArea(); i++) {
-        if (i % 10 == 0) {
-          bout << i << "/" << session()->GetNumMessagesInCurrentMessageArea() << "\r";
-        }
-        postrec *p = get_post(i);
-        if (p) {
-          long lMessageSize;
-          unique_ptr<char[]> mt(readfile(&(p->msg), sfn, &lMessageSize));
-          if (!mt) {
-            mt.reset(new char[10]);
-            if (mt) {
-              strcpy(mt.get(), "??");
-              lMessageSize = 3;
-            }
-          }
-          if (mt) {
-            savefile(mt.get(), lMessageSize, &(p->msg), nfn);
-            write_post(i, p);
-          }
-        }
-        bout << i << "/" << session()->GetNumMessagesInCurrentMessageArea() << "\r";
-      }
-
-      File::Remove(fn1);
-      File::Rename(fn2, fn1);
-
-      close_sub();
-      bout << "|#7\xFE |#1Done Packing " << session()->GetNumMessagesInCurrentMessageArea() <<
-                         " messages.                              \r\n";
-    }
-  }
-}
-
-void pack_all_subs() {
-  TempDisablePause disable_pause;
-
-  for (int i=0; i < session()->num_subs && !hangup; i++) {
-    pack_sub(i);
-    bool abort = checka();
-    if (abort) {
-      bout << "|#6Aborted.\r\n";
-      return;
+      *msgnum = a()->GetNumMessagesInCurrentMessageArea();
     }
   }
 }

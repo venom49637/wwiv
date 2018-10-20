@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -32,9 +32,11 @@ using std::cout;
 using std::endl;
 using std::string;
 
+using wwiv::sdk::User;
+
 class PrintFileTest : public ::testing::Test {
 protected:
-    virtual void SetUp() {
+  void SetUp() override {
         helper.SetUp();
     }
 
@@ -52,14 +54,15 @@ TEST_F(PrintFileTest, LanguageDir) {
     CreateTempFile("gfiles/one.b&w");
     CreateTempFile("gfiles/one.msg");
 
+    helper.user()->SetStatus(0);
     string actual_msg = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_msg, actual_msg);
 
-    helper.user()->SetStatusFlag(WUser::ansi);
+    helper.user()->SetStatusFlag(User::ansi);
     string actual_bw = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_bw, actual_bw);
 
-    helper.user()->SetStatusFlag(WUser::color);
+    helper.user()->SetStatusFlag(User::status_color);
     string actual_ans = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_ans, actual_ans);
 }
@@ -69,14 +72,15 @@ TEST_F(PrintFileTest, GFilesOnly_NoExt) {
     const string expected_bw = CreateTempFile("gfiles/one.b&w");
     const string expected_msg = CreateTempFile("gfiles/one.msg");
 
+    helper.user()->SetStatus(0);
     string actual_msg = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_msg, actual_msg);
 
-    helper.user()->SetStatusFlag(WUser::ansi);
+    helper.user()->SetStatusFlag(User::ansi);
     string actual_bw = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_bw, actual_bw);
 
-    helper.user()->SetStatusFlag(WUser::color);
+    helper.user()->SetStatusFlag(User::status_color);
     string actual_ans = CreateFullPathToPrint("one");
     EXPECT_EQ(expected_ans, actual_ans);
 }

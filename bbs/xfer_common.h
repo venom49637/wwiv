@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*                Copyright (C)2014-2015 WWIV Software Services           */
+/*                              WWIV Version 5.x                          */
+/*                Copyright (C)2014-2017, WWIV Software Services          */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,8 +18,8 @@
 #ifndef __INCLUDED_XFER_COMMON_H__
 #define __INCLUDED_XFER_COMMON_H__
 
-#define XFER_TIME(b) (modem_speed?\
-    (((double)(((b)+127)/128))*1280.0/((double)modem_speed))\
+#define XFER_TIME(b) (a()->modem_speed_?\
+    (((double)(((b)+127)/128))*1280.0/((double)a()->modem_speed_))\
     :0.0)
 
 

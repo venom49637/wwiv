@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,8 +17,15 @@
 /*                                                                        */
 /**************************************************************************/
 
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsutl2.h"
+#include "bbs/conf.h"
 #include "bbs/confutil.h"
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+#include "bbs/xfer.h"
+#include "bbs/mmkey.h"
 #include "core/strings.h"
 
 
@@ -33,12 +40,12 @@
 /** Displays the available file areas for the current user. */
 void dirlist(int mode) {
   bool next   = false;
-  int oc      = session()->GetCurrentConferenceFileArea();
-  int os      = udir[session()->GetCurrentFileArea()].subnum;
+  int oc      = a()->GetCurrentConferenceFileArea();
+  int os      = a()->current_user_dir().subnum;
   int tally   = 0;
   int nd      = 0;
-  int sn      = session()->GetCurrentConferenceFileArea();
-  int en      = session()->GetCurrentConferenceFileArea();
+  int sn      = a()->GetCurrentConferenceFileArea();
+  int en      = a()->GetCurrentConferenceFileArea();
   bool done   = false;
 
   do {
@@ -46,23 +53,23 @@ void dirlist(int mode) {
     bool abort = false;
     int p = 1;
     int i = sn;
-    char *ss = nullptr;
 
-    while (i <= en && uconfdir[i].confnum != -1 && !abort) {
-      int i1 = 0;
-      while (i1 < session()->num_dirs && udir[i1].subnum != -1 && !abort) {
-        char s[ 255 ];
-        int firstp = 0;
+    while (i <= en && a()->uconfdir[i].confnum != -1 && !abort) {
+      size_t i1 = 0;
+      while (i1 < a()->directories.size() && a()->udir[i1].subnum != -1 && !abort) {
+        char s[255];
+        size_t firstp = 0;
         if (p && mode == 0) {
           p = 0;
           firstp = i1;
           bout.cls();
-          if (uconfdir[1].confnum != -1 && okconf(session()->user())) {
+          if (a()->uconfdir[1].confnum != -1 && okconf(a()->user())) {
+            auto conf_name = stripcolors(a()->dirconfs[a()->uconfdir[i].confnum].conf_name);
             sprintf(s, " [ %s %c ] [ %s ] ", "Conference",
-                    dirconfs[uconfdir[i].confnum].designator,
-                    stripcolors(reinterpret_cast<char*>(dirconfs[uconfdir[i].confnum].name)));
+              a()->dirconfs[a()->uconfdir[i].confnum].designator,
+              conf_name.c_str());
           } else {
-            sprintf(s, " [ %s File Areas ] ", syscfg.systemname);
+            sprintf(s, " [ %s File Areas ] ", a()->config()->system_name().c_str());
           }
           bout.litebar(s);
           DisplayHorizontalBar(78, 7);
@@ -70,54 +77,54 @@ void dirlist(int mode) {
           DisplayHorizontalBar(78, 7);
         }
         ++nd;
-        int nDirectoryNumber = udir[i1].subnum;
-        if (nDirectoryNumber == 0) {
+        int directory_number = a()->udir[i1].subnum;
+        if (directory_number == 0) {
           is = true;
         }
         std::string scanme = "|#6No ";
-        if (qsc_n[ nDirectoryNumber / 32 ] & (1L << (nDirectoryNumber % 32))) {
+        if (a()->context().qsc_n[directory_number / 32] & (1L << (directory_number % 32))) {
           scanme = "|#5Yes";
         }
-        dliscan1(nDirectoryNumber);
-        if (udir[session()->GetCurrentFileArea()].subnum == udir[i1].subnum) {
-          sprintf(s, " |#9%3s |#9\xB3 |#6%3s |#9\xB3|B1|15 %-40.40s |#9\xB3 |#9%4d|B0",
-                  udir[i1].keys, scanme.c_str(), directories[nDirectoryNumber].name,
-                  session()->numf);
+        dliscan1(directory_number);
+        if (a()->current_user_dir().subnum == a()->udir[i1].subnum) {
+          sprintf(s, " |#9%3s |#9\xB3 |#6%3s |#9\xB3|17|15 %-40.40s |#9\xB3 |#9%4d|16",
+                  a()->udir[i1].keys, scanme.c_str(), a()->directories[directory_number].name,
+                  a()->numf);
         } else {
           sprintf(s, " |#9%3s |#9\xB3 |#6%3s |#9\xB3 %s%-40.40s |#9\xB3 |#9%4d",
-                  udir[i1].keys, scanme.c_str(),
-                  (((mode == 1) && (directories[udir[i1].subnum].mask & mask_cdrom)) ? "|#9" : "|#1"),
-                  directories[ nDirectoryNumber ].name, session()->numf);
+                  a()->udir[i1].keys, scanme.c_str(),
+                  (((mode == 1) && (a()->directories[a()->udir[i1].subnum].mask & mask_cdrom)) ? "|#9" : "|#1"),
+                  a()->directories[ directory_number ].name, a()->numf);
         }
         if (okansi()) {
-          osan(s, &abort, &next);
+          bout.bputs(s, &abort, &next);
         } else {
-          osan(stripcolors(s), &abort, &next);
+          bout.bputs(stripcolors(s), &abort, &next);
         }
-        tally += session()->numf;
+        tally += a()->numf;
         int lastp = i1++;
         bout.nl();
-        if (lines_listed >= session()->screenlinest - 2 && mode == 0) {
+        if (bout.lines_listed() >= a()->screenlinest - 2 && mode == 0) {
           p = 1;
-          lines_listed = 0;
+          bout.clear_lines_listed();
           DisplayHorizontalBar(78, 7);
-          bout.bprintf("|#1Select |#9[|#2%d-%d, [Enter]=Next Page, Q=Quit|#9]|#0 : ",
+          bout.bprintf("|#1Select |#9[|#2%d-%d, [N]ext Page, [Q]uit|#9]|#0 : ",
                                             is ? firstp : firstp + 1, lastp);
-          ss = mmkey(1, WSession::mmkeyFileAreas, true);
+          std::string ss = mmkey(MMKeyAreaType::dirs, true);
           if (isdigit(ss[0])) {
-            for (int i3 = 0; i3 < session()->num_dirs; i3++) {
-              if (wwiv::strings::IsEquals(udir[i3].keys, ss)) {
-                session()->SetCurrentFileArea(i3);
-                os      = udir[session()->GetCurrentFileArea()].subnum;
-                done    = true;
-                abort   = true;
+            for (uint16_t i3 = 0; i3 < static_cast<uint16_t>(a()->directories.size()); i3++) {
+              if (ss == a()->udir[i3].keys) {
+                a()->set_current_user_dir_num(i3);
+                os = a()->current_user_dir().subnum;
+                done = true;
+                abort = true;
               }
             }
           } else {
-            switch (ss[0]) {
+            switch (ss.front()) {
             case 'Q':
-              if (okconf(session()->user())) {
-                setuconf(CONF_DIRS, oc, os);
+              if (okconf(a()->user())) {
+                setuconf(ConferenceType::CONF_DIRS, oc, os);
               }
               done    = true;
               abort   = true;
@@ -132,19 +139,19 @@ void dirlist(int mode) {
       if (nd) {
         i++;
       }
-      if (!okconf(session()->user())) {
+      if (!okconf(a()->user())) {
         break;
       }
     }
     if (i == 0) {
-      pla("None.", &abort);
+      bout.bpla("None.", &abort);
       bout.nl();
     }
     if (!abort && mode == 0) {
       p = 1;
       DisplayHorizontalBar(78, 7);
-      if (okconf(session()->user())) {
-        if (uconfdir[1].confnum != -1) {
+      if (okconf(a()->user())) {
+        if (a()->uconfdir[1].confnum != -1) {
           bout.bprintf("|#1Select |#9[|#2%d-%d, J=Join Conference, ?=List Again, Q=Quit|#9]|#0 : ",
                                             is ? 0 : 1, is ? nd - 1 : nd);
         } else {
@@ -155,40 +162,38 @@ void dirlist(int mode) {
         bout.bprintf("|#1Select |#9[|#2%d-%d, ?=List Again, Q=Quit|#9]|#0 : ", is ? 0 : 1,
                                           is ? nd - 1 : nd);
       }
-      ss = mmkey(0, true);
-      if (wwiv::strings::IsEquals(ss, "") ||
-          wwiv::strings::IsEquals(ss, "Q") ||
-          wwiv::strings::IsEquals(ss, "\r")) {
-        if (okconf(session()->user())) {
-          setuconf(CONF_DIRS, oc, os);
+      std::string ss = mmkey(MMKeyAreaType::subs, true);
+      if (ss.empty() || ss == "Q" || ss == "\r") {
+        if (okconf(a()->user())) {
+          setuconf(ConferenceType::CONF_DIRS, oc, os);
         }
         done = true;
       }
-      if (wwiv::strings::IsEquals(ss, "J")) {
-        if (okconf(session()->user())) {
-          jump_conf(CONF_DIRS);
+      if (ss == "J") {
+        if (okconf(a()->user())) {
+          jump_conf(ConferenceType::CONF_DIRS);
         }
-        sn = en = oc = session()->GetCurrentConferenceFileArea();
+        sn = en = oc = a()->GetCurrentConferenceFileArea();
         nd = i = 0;
         is = false;
       }
-      if (isdigit(ss[0])) {
-        for (int i3 = 0; i3 < session()->num_dirs; i3++) {
-          if (wwiv::strings::IsEquals(udir[i3].keys, ss)) {
-            session()->SetCurrentFileArea(i3);
-            os = udir[session()->GetCurrentFileArea()].subnum;
+      if (isdigit(ss.front())) {
+        for (uint16_t i3 = 0; i3 < a()->directories.size(); i3++) {
+          if (ss == a()->udir[i3].keys) {
+            a()->set_current_user_dir_num(i3);
+            os = a()->current_user_dir().subnum;
             done = true;
           }
         }
       }
       nd = 0;
     } else {
-      if (okconf(session()->user())) {
-        setuconf(CONF_DIRS, oc, os);
+      if (okconf(a()->user())) {
+        setuconf(ConferenceType::CONF_DIRS, oc, os);
       }
       done = true;
     }
-  } while (!hangup && !done);
+  } while (!a()->hangup_ && !done);
 }
 
 

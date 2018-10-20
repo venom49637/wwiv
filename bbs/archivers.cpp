@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -21,22 +21,24 @@
 #include <cstring>
 #include <string>
 
-#include "bbs/vars.h"
-#include "bbs/wconstants.h"
+#include "bbs/bbs.h"
+#include "local_io/wconstants.h"
+#include "bbs/application.h"
 #include "core/strings.h"
 #include "core/file.h"
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::strings;
 
-static int check_arc(const char* filename)
-{
+static int check_arc(const char* filename) {
   File f(filename);
   if (!f.Open(File::modeReadOnly)) {
     return COMPRESSION_UNKNOWN;
   }
 
   char header[10];
-  int num_read = f.Read(&header, 10);
+  auto num_read = f.Read(&header, 10);
   if (num_read < 10) {
     return COMPRESSION_UNKNOWN;
   }
@@ -75,21 +77,21 @@ static int check_arc(const char* filename)
     return COMPRESSION_UNKNOWN;
   }
   ++ext;
-  if (strcasecmp(ext, "ZIP") == 0) {
+  if (iequals(ext, "ZIP")) {
     return COMPRESSION_ZIP;
-  } else if (strcasecmp(ext, "LHA") == 0) {
+  } else if (iequals(ext, "LHA")) {
     return COMPRESSION_LHA;
-  } else if (strcasecmp(ext, "LZH") == 0) {
+  } else if (iequals(ext, "LZH")) {
     return COMPRESSION_LHA;
-  } else if (strcasecmp(ext, "ZOO") == 0) {
+  } else if (iequals(ext, "ZOO")) {
     return COMPRESSION_ZOO;
-  } else if (strcasecmp(ext, "ARC") == 0) {
+  } else if (iequals(ext, "ARC")) {
     return COMPRESSION_PAK;
-  } else if (strcasecmp(ext, "PAK") == 0) {
+  } else if (iequals(ext, "PAK")) {
     return COMPRESSION_PAK;
-  } else if (strcasecmp(ext, "ARJ") == 0) {
+  } else if (iequals(ext, "ARJ")) {
     return COMPRESSION_ARJ;
-  } else if (strcasecmp(ext, "RAR") == 0) {
+  } else if (iequals(ext, "RAR")) {
     return COMPRESSION_RAR;
   }
   return COMPRESSION_UNKNOWN;
@@ -109,28 +111,31 @@ int match_archiver(const char *filename) {
   }
   switch (x) {
     case COMPRESSION_ZIP:
-      strcpy(type, "ZIP");
+      to_char_array(type, "ZIP");
       break;
     case COMPRESSION_LHA:
-      strcpy(type, "LHA");
+      to_char_array(type, "LHA");
       break;
     case COMPRESSION_ARJ:
-      strcpy(type, "ARJ");
+      to_char_array(type, "ARJ");
       break;
     case COMPRESSION_PAK:
-      strcpy(type, "PAK");
+      to_char_array(type, "PAK");
       break;
     case COMPRESSION_ZOO:
-      strcpy(type, "ZOO");
+      to_char_array(type, "ZOO");
       break;
     case COMPRESSION_RAR:
-      strcpy(type, "RAR");
+      to_char_array(type, "RAR");
+      break;
+    default:
+      to_char_array(type, "ZIP");
       break;
   }
 
   x = 0;
   while (x < 4) {
-    if (strcasecmp(type, arcs[x].extension) == 0) {
+    if (iequals(type, a()->arcs[x].extension)) {
       return x;
     }
     ++x;

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,196 +18,181 @@
 /**************************************************************************/
 #include "bbs/interpret.h"
 
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl2.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+#include "bbs/pause.h"
 #include "bbs/datetime.h"
-#include "bbs/wconstants.h"
+#include "local_io/wconstants.h"
 #include "core/strings.h"
+#include "core/datetime.h"
 
+using std::string;
+using std::to_string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
+using namespace wwiv::strings;
 
-const char *interpret(char chKey) {
-  static char s[255];
-
-  memset(s, 0, sizeof(s));
-  if (g_flags & g_flag_disable_mci) {
+std::string MacroContext::interpret(char ch) const {
+  if (!mci_enabled()) {
     return "";
   }
 
-  switch (chKey) {
+  switch (ch) {
   case '@':                               // Dir name
-    strcpy(s, directories[udir[session()->GetCurrentFileArea()].subnum].name);
-    break;
+    return dir().name;
   case '~':                               // Total mails/feedbacks sent
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumEmailSent() +
-             session()->user()->GetNumFeedbackSent() + session()->user()->GetNumNetEmailSent());
-    break;
+    return to_string(u().GetNumEmailSent() +
+             u().GetNumFeedbackSent() + u().GetNumNetEmailSent());
   case '/':                               // Today's date
-    strcpy(s, fulldate());
-    break;
+    return fulldate();
   case '%':                               // Time left today
-    snprintf(s, sizeof(s), "%d", static_cast<int>(nsl() / 60));
+    return to_string(static_cast<int>(nsl() / 60));
     break;
   case '#':                               // User's number
-    snprintf(s, sizeof(s), "%d", session()->usernum);
-    break;
+    return to_string(a()->usernum);
   case '$':                               // File points
-    snprintf(s, sizeof(s), "%lu", session()->user()->GetFilePoints());
-    break;
+    return to_string(u().GetFilePoints());
   case '*':                               // User reg num
-    snprintf(s, sizeof(s), "%lu", session()->user()->GetWWIVRegNumber());
-    break;
+    return to_string(u().GetWWIVRegNumber());
   case '-':                               // Aggravation points
-    snprintf(s, sizeof(s), "%u", session()->user()->GetAssPoints());
-    break;
+    return to_string(u().GetAssPoints());
   case ':':                               // Sub number
-    strcpy(s, usub[session()->GetCurrentMessageArea()].keys);
-    break;
+    return a()->current_user_sub().keys;
   case ';':                               // Directory number
-    strcpy(s, udir[session()->GetCurrentFileArea()].keys);
-    break;
+    return a()->current_user_dir().keys;
   case '!':                               // Built-in pause
     pausescr();
-    break;
-  case '&': {
-    strcpy(s, session()->user()->HasAnsi() ? "ANSI" : "ASCII");
-  }
-  break;
+    return "";
+  case '&':
+    return u().HasAnsi() ? "ANSI" : "ASCII";
   case 'A':                               // User's age
-    snprintf(s, sizeof(s), "%d", session()->user()->GetAge());
-    break;
+    return to_string(u().GetAge());
   case 'a':                               // User's language
-    strcpy(s, cur_lang_name);
-    break;
+    return a()->cur_lang_name;
   case 'B':                               // User's birthday
-    snprintf(s, sizeof(s), "%d/%d/%d", session()->user()->GetBirthdayMonth(),
-             session()->user()->GetBirthdayDay(), session()->user()->GetBirthdayYear());
-    break;
+    return StringPrintf("%d/%d/%d", u().GetBirthdayMonth(),
+             u().GetBirthdayDay(), u().GetBirthdayYear());
   case 'b':                               // Minutes in bank
-    snprintf(s, sizeof(s), "%u", session()->user()->GetTimeBankMinutes());
-    break;
+    return to_string(u().GetTimeBankMinutes());
   case 'C':                               // User's city
-    strcpy(s, session()->user()->GetCity());
-    break;
+    return u().GetCity();
   case 'c':                               // User's country
-    strcpy(s, session()->user()->GetCountry());
-    break;
+    return u().GetCountry();
   case 'D':                               // Files downloaded
-    snprintf(s, sizeof(s), "%u", session()->user()->GetFilesDownloaded());
-    break;
+    return to_string(u().GetFilesDownloaded());
   case 'd':                               // User's DSL
-    snprintf(s, sizeof(s), "%d", session()->user()->GetDsl());
-    break;
+    return to_string(u().GetDsl());
   case 'E':                               // E-mails sent
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumEmailSent());
-    break;
+    return to_string(u().GetNumEmailSent());
   case 'e':                               // Net E-mails sent
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumNetEmailSent());
-    break;
+    return to_string(u().GetNumNetEmailSent());
   case 'F':
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumFeedbackSent());
-    break;
+    return to_string(u().GetNumFeedbackSent());
   case 'f':                               // First time user called
-    strcpy(s, session()->user()->GetFirstOn());
-    break;
+    return u().GetFirstOn();
   case 'G':                               // MessaGes read
-    snprintf(s, sizeof(s), "%lu", session()->user()->GetNumMessagesRead());
-    break;
+    return to_string(u().GetNumMessagesRead());
   case 'g':                               // Gold
-    snprintf(s, sizeof(s), "%f", session()->user()->GetGold());
-    break;
+    return to_string(u().GetGold());
   case 'I':                               // User's call sIgn
-    strcpy(s, session()->user()->GetCallsign());
-    break;
+    return u().GetCallsign();
   case 'i':                               // Illegal log-ons
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumIllegalLogons());
-    break;
-  case 'J':                               // Message conference
-    strcpy(s, reinterpret_cast<char*>(subconfs[uconfsub[session()->GetCurrentConferenceMessageArea()].confnum].name));
-    break;
+    return to_string(u().GetNumIllegalLogons());
+  case 'J': {                             // Message conference
+    auto x = a()->GetCurrentConferenceMessageArea();
+    auto cnum = a()->uconfsub[x].confnum;
+    return a()->subconfs[cnum].conf_name;
+  }
   case 'j':                               // Transfer conference
-    strcpy(s, reinterpret_cast<char*>(dirconfs[uconfdir[session()->GetCurrentConferenceFileArea()].confnum].name));
-    break;
+    return a()->dirconfs[a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum].conf_name;
   case 'K':                               // Kb uploaded
-    snprintf(s, sizeof(s), "%lu", session()->user()->GetUploadK());
-    break;
+    return to_string(u().GetUploadK());
   case 'k':                               // Kb downloaded
-    snprintf(s, sizeof(s), "%lu", session()->user()->GetDownloadK());
-    break;
+    return to_string(u().GetDownloadK());
   case 'L':                               // Last call
-    strcpy(s, session()->user()->GetLastOn());
-    break;
+    return u().GetLastOn();
   case 'l':                               // Number of logons
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumLogons());
-    break;
+    return to_string(u().GetNumLogons());
   case 'M':                               // Mail waiting
-    snprintf(s, sizeof(s), "%d", session()->user()->GetNumMailWaiting());
-    break;
+    return to_string(u().GetNumMailWaiting());
   case 'm':                               // Messages posted
-    snprintf(s, sizeof(s), "%u", session()->user()->GetNumMessagesPosted());
-    break;
+    return to_string(u().GetNumMessagesPosted());
   case 'N':                               // User's name
-    strcpy(s, session()->user()->GetName());
-    break;
+    return u().GetName();
   case 'n':                               // Sysop's note
-    strcpy(s, session()->user()->GetNote());
-    break;
+    return u().GetNote();
   case 'O':                               // Times on today
-    snprintf(s, sizeof(s), "%d", session()->user()->GetTimesOnToday());
-    break;
-  case 'o':                               // Time on today
-    snprintf(s, sizeof(s), "%ld", static_cast<long>((session()->user()->GetTimeOn() +
-             timer() - timeon) /
-             SECONDS_PER_MINUTE_FLOAT));
-    break;
+    return to_string(u().GetTimesOnToday());
+  case 'o': {
+    // Time on today
+    auto used_this_session = (std::chrono::system_clock::now() - a()->system_logon_time());
+    auto min_used = u().timeon() + used_this_session;
+    return to_string(std::chrono::duration_cast<std::chrono::minutes>(min_used).count());
+  }
   case 'P':                               // BBS phone
-    strcpy(s, reinterpret_cast<char*>(syscfg.systemphone));
-    break;
+    return a()->config()->system_phone();
   case 'p':                               // User's phone
-    strcpy(s, session()->user()->GetDataPhoneNumber());
-    break;
+    return u().GetDataPhoneNumber();
   case 'R':                               // User's real name
-    strcpy(s, session()->user()->GetRealName());
-    break;
+    return u().GetRealName();
   case 'r':                               // Last baud rate
-    snprintf(s, sizeof(s), "%d", session()->user()->GetLastBaudRate());
-    break;
+    return to_string(u().GetLastBaudRate());
   case 'S':                               // User's SL
-    snprintf(s, sizeof(s), "%d", session()->user()->GetSl());
-    break;
+    return to_string(u().GetSl());
   case 's':                               // User's street address
-    strcpy(s, session()->user()->GetStreet());
-    break;
+    return u().GetStreet();
   case 'T':                               // User's sTate
-    strcpy(s, session()->user()->GetState());
-    break;
+    return u().GetState();
   case 't':                               // Current time
-    strcpy(s, times());
-    break;
+    return times();
   case 'U':                               // Files uploaded
-    snprintf(s, sizeof(s), "%u", session()->user()->GetFilesUploaded());
-    break;
+    return to_string(u().GetFilesUploaded());
   case 'u':                               // Current sub
-    strcpy(s, subboards[usub[session()->GetCurrentMessageArea()].subnum].name);
-    break;
+    return a()->subs().sub(a()->current_user_sub().subnum).name;
   case 'W':                               // Total # of messages in sub
-    snprintf(s, sizeof(s), "%d", session()->GetNumMessagesInCurrentMessageArea());
-    break;
+    return to_string(a()->GetNumMessagesInCurrentMessageArea());
   case 'X':                               // User's sex
-    snprintf(s, sizeof(s), "%c", session()->user()->GetGender());
-    break;
+    return StringPrintf("%c", u().GetGender());
   case 'Y':                               // Your BBS name
-    strcpy(s, syscfg.systemname);
-    break;
-  case 'y': {                              // Computer type
-    const std::string ctype = ctypes(session()->user()->GetComputerType());
-    strcpy(s, ctype.c_str());
-  } break;
+    return a()->config()->system_name();
+  case 'y':                               // Computer type
+    return ctypes(u().GetComputerType());
   case 'Z':                               // User's zip code
-    strcpy(s, session()->user()->GetZipcode());
-    break;
+    return u().GetZipcode();
   default:
     return "";
   }
-
-  return s;
 }
 
+bool BbsMacroFiilter::write(char c) {
+  if (in_macro_) {
+    auto s = ctx_->interpret(c);
+    for (const auto ch : s) {
+      chain_->write(ch);
+    }
+    return true;
+  } else if (in_pipe_) {
+    if (c == '@') {
+      in_macro_ = true;
+      in_pipe_ = false;
+      return true;
+    } else {
+      in_macro_ = false;
+      in_pipe_ = false;
+      chain_->write('|');
+      return chain_->write(c);
+    }
+  } else if (c == '|') {
+    in_pipe_ = true;
+    in_macro_ = false;
+    return true;
+  } else {
+    return chain_->write(c);
+  }
+}
+
+bool BbsMacroFiilter::attr(uint8_t a) { 
+  return chain_->attr(a);
+}

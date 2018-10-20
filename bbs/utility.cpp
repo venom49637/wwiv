@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -24,59 +24,65 @@
 
 #else
 #include <utime.h>
-#endif  // WIN32
+#endif // WIN32
 
 #include <string>
 #include <vector>
 
-#include "bbs/datetime.h"
-#include "bbs/input.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsovl3.h"
+#include "bbs/bbsutl.h"
+#include "bbs/bgetch.h"
+#include "bbs/com.h"
 #include "bbs/common.h"
-#include "bbs/keycodes.h"
-#include "bbs/wconstants.h"
-#include "bbs/wwiv.h"
+#include "bbs/connect1.h"
+#include "bbs/datetime.h"
+#include "bbs/events.h"
+#include "bbs/input.h"
+#include "bbs/instmsg.h"
+#include "bbs/utility.h"
+#include "bbs/workspace.h"
+#include "bbs/wqscn.h"
+#include "local_io/keycodes.h"
+#include "local_io/wconstants.h"
+
+#include "core/findfiles.h"
 #include "core/os.h"
+#include "core/stl.h"
 #include "core/strings.h"
-#include "core/wfndfile.h"
 #include "core/wwivassert.h"
 #include "sdk/config.h"
 
-using std::chrono::milliseconds;
 using std::string;
 using std::vector;
+using namespace std::chrono;
+using namespace wwiv::core;
 using namespace wwiv::os;
 using namespace wwiv::strings;
 
-extern const unsigned char *translate_letters[];
+extern const unsigned char* translate_letters[];
 
-template<class _Ty> inline const _Ty& in_range(const _Ty& minValue, const _Ty& maxValue, const _Ty& value);
+template <class _Ty>
+inline const _Ty& in_range(const _Ty& minValue, const _Ty& maxValue, const _Ty& value);
 
 /**
  * Deletes files from a directory.  This is meant to be used only in the temp
  * directories of WWIV.
  *
- * @param pszFileName       Wildcard file specification to delete
+ * @param file_name       Wildcard file specification to delete
  * @param pszDirectoryName  Name of the directory to delete files from
  * @param bPrintStatus      Print out locally as files are deleted
  */
-void remove_from_temp(const char *pszFileName, const char *pszDirectoryName, bool bPrintStatus) {
-  WWIV_ASSERT(pszFileName);
-  WWIV_ASSERT(pszDirectoryName);
-
-  const string filespec = StrCat(pszDirectoryName, stripfn(pszFileName));
-  WFindFile fnd;
-  bool bFound = fnd.open(filespec, 0);
+void remove_from_temp(const std::string& file_name, const std::string& directory_name,
+                      bool bPrintStatus) {
+  const auto filespec = StrCat(directory_name, stripfn(file_name.c_str()));
+  FindFiles ff(filespec, FindFilesType::any);
   bout.nl();
-  while (bFound) {
-    const string filename = fnd.GetFileName();
+  for (const auto& f : ff) {
     // We don't want to delete ".", "..".
-    if (filename != "." && filename != "..") {
-      if (bPrintStatus) {
-        std::clog << "Deleting TEMP file: " << pszDirectoryName << filename << std::endl;
-      }
-      File::Remove(pszDirectoryName, filename);
-    }
-    bFound = fnd.next();
+    const auto fullpath = FilePath(directory_name, f.name);
+    LOG_IF(bPrintStatus, INFO) << "Deleting TEMP file: '" << fullpath << "'";
+    File::Remove(fullpath);
   }
 }
 
@@ -86,70 +92,43 @@ void remove_from_temp(const char *pszFileName, const char *pszDirectoryName, boo
  *
  * @return true if the user wants ANSI, false otherwise.
  */
-bool okansi() {
-  return session()->user()->HasAnsi() && !x_only;
-}
+bool okansi() { return a()->user()->HasAnsi(); }
 
 /**
  * Should be called after a user is logged off, and will initialize
  * screen-access variables.
  */
 void frequent_init() {
-  setiia(90);
-  g_flags = 0;
-  session()->tagging = 0;
-  newline = true;
-  session()->SetCurrentReadMessageArea(-1);
-  session()->SetCurrentConferenceMessageArea(0);
-  session()->SetCurrentConferenceFileArea(0);
-  ansiptr = 0;
-  curatr = 0x07;
-  outcom = false;
-  incom = false;
-  charbufferpointer = 0;
-  session()->localIO()->SetTopLine(0);
-  session()->screenlinest = defscreenbottom + 1;
-  endofline[0] = '\0';
-  hangup = false;
-  chatcall = false;
-  session()->localIO()->ClearChatReason();
-  session()->SetUserOnline(false);
-  change_color = 0;
-  chatting = 0;
-  local_echo = true;
-  irt[0] = '\0';
-  irt_name[0] = '\0';
-  lines_listed = 0;
-  session()->ReadCurrentUser(1);
-  read_qscn(1, qsc, false);
-  fwaiting = (session()->user()->IsUserDeleted()) ? 0 : session()->user()->GetNumMailWaiting();
-  okmacro = true;
-  okskey = true;
-  mailcheck = false;
-  smwcheck = false;
-  use_workspace = false;
-  extratimecall = 0.0;
-  session()->using_modem = 0;
-  session()->capture()->set_global_handle(false);
-  File::SetFilePermissions(g_szDSZLogFileName, File::permReadWrite);
-  File::Remove(g_szDSZLogFileName);
-  session()->SetTimeOnlineLimited(false);
-  session()->capture()->set_x_only(false, nullptr, false);
-  set_net_num(0);
-  set_language(session()->user()->GetLanguage());
-  reset_disable_conf();
-}
+  setiia(seconds(5));
 
+  // Context Globals to move to Appliction
+  // Context Globals in Appliction
+  a()->context().reset();
+  use_workspace = false;
+
+  set_net_num(0);
+  read_qscn(1, a()->context().qsc, false);
+  set_language(a()->user()->GetLanguage());
+  reset_disable_conf();
+
+  // Output context
+  bout.reset();
+  bout.okskey(true);
+
+  // DSZ Log
+  File::SetFilePermissions(a()->dsz_logfile_name_, File::permReadWrite);
+  File::Remove(a()->dsz_logfile_name_);
+}
 
 /**
  * Gets the current users upload/download ratio.
  */
 double ratio() {
-  if (session()->user()->GetDownloadK() == 0) {
+  if (a()->user()->GetDownloadK() == 0) {
     return 99.999;
   }
-  double r = static_cast<float>(session()->user()->GetUploadK()) /
-             static_cast<float>(session()->user()->GetDownloadK());
+  double r = static_cast<float>(a()->user()->GetUploadK()) /
+             static_cast<float>(a()->user()->GetDownloadK());
 
   return (r > 99.998) ? 99.998 : r;
 }
@@ -158,106 +137,66 @@ double ratio() {
  * Gets the current users post/call ratio.
  */
 double post_ratio() {
-  if (session()->user()->GetNumLogons() == 0) {
+  if (a()->user()->GetNumLogons() == 0) {
     return 99.999;
   }
-  double r = static_cast<float>(session()->user()->GetNumMessagesPosted()) /
-             static_cast<float>(session()->user()->GetNumLogons());
+  double r = static_cast<float>(a()->user()->GetNumMessagesPosted()) /
+             static_cast<float>(a()->user()->GetNumLogons());
   return (r > 99.998) ? 99.998 : r;
 }
 
-double nsl() {
-  double rtn = 1.00;
-
-  double dd = timer();
-  if (session()->IsUserOnline()) {
-    if (timeon > (dd + SECONDS_PER_MINUTE_FLOAT)) {
-      timeon -= SECONDS_PER_HOUR_FLOAT * HOURS_PER_DAY_FLOAT;
-    }
-    double tot = dd - timeon;
-    double tpl = static_cast<double>(getslrec(session()->GetEffectiveSl()).time_per_logon) * MINUTES_PER_HOUR_FLOAT;
-    double tpd = static_cast<double>(getslrec(session()->GetEffectiveSl()).time_per_day) * MINUTES_PER_HOUR_FLOAT;
-    double tlc = tpl - tot + session()->user()->GetExtraTime() + extratimecall;
-    double tlt = tpd - tot - static_cast<double>(session()->user()->GetTimeOnToday()) +
-                 session()->user()->GetExtraTime();
-
-    tlt = std::min<double>(tlc, tlt);
-    rtn = in_range<double>(0.0, 32767.0, tlt);
+long nsl() {
+  const auto dd = system_clock::now();
+  if (!a()->IsUserOnline()) {
+    return 1;
   }
+  auto tot = dd - a()->system_logon_time();
 
-  session()->SetTimeOnlineLimited(false);
-  if (syscfg.executetime) {
-    double tlt = time_event - dd;
-    if (tlt < 0.0) {
-      tlt += HOURS_PER_DAY_FLOAT * SECONDS_PER_HOUR_FLOAT;
-    }
-    if (rtn > tlt) {
-      rtn = tlt;
-      session()->SetTimeOnlineLimited(true);
-    }
-    check_event();
-    if (do_event) {
-      rtn = 0.0;
-    }
-  }
-  return in_range<double>(0.0, 32767.0, rtn);
+  const auto tpl = minutes(a()->effective_slrec().time_per_logon);
+  const auto tpd = minutes(a()->effective_slrec().time_per_day);
+  const auto extra_time =
+      duration_cast<seconds>(a()->user()->extra_time() + a()->extratimecall());
+  const auto tlc = tpl - tot + extra_time;
+  const auto tlt = std::min(
+      tlc, tpd - tot -
+               seconds(std::lround(a()->user()->GetTimeOnToday() + a()->user()->GetExtraTime())));
+  a()->SetTimeOnlineLimited(false);
+  return static_cast<long>(in_range<int64_t>(0, 32767, duration_cast<seconds>(tlt).count()));
 }
 
-void Wait(double d) {
-  WWIV_ASSERT(d >= 0);
-  if (d < 0) {
-    return ;
-  }
-  const long lStartTime = timer1();
-  auto l = d * 18.2;
-  while (abs(timer1() - lStartTime) < l) {
-    giveup_timeslice();
-  }
-}
-
-/**
- * Returns the number of bytes free on the disk/volume specified.
- *
- * @param pszPathName Directory or Drive of which to list the free space.
- */
-long freek1(const char *pszPathName) {
-  WWIV_ASSERT(pszPathName);
-  return File::GetFreeSpaceForPath(pszPathName);
-}
-
-void send_net(net_header_rec * nh, unsigned short int *list, const char *text, const char *byname) {
+void send_net(net_header_rec* nh, std::vector<uint16_t> list, const std::string& text,
+              const std::string& byname) {
   WWIV_ASSERT(nh);
 
-  const string filename = StringPrintf("%sp1%s",
-    session()->GetNetworkDataDirectory().c_str(),
-    application()->GetNetworkExtension().c_str());
+  const string filename = StrCat(a()->network_directory(), "p1", a()->network_extension());
   File file(filename);
   if (!file.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile)) {
     return;
   }
-  file.Seek(0L, File::seekEnd);
-  if (!list) {
+  file.Seek(0L, File::Whence::end);
+  if (list.empty()) {
     nh->list_len = 0;
   }
-  if (!text) {
+  if (text.empty()) {
     nh->length = 0;
   }
   if (nh->list_len) {
     nh->tosys = 0;
   }
-  long lNetHeaderSize = nh->length;
-  if (byname && *byname) {
-    nh->length += strlen(byname) + 1;
+  if (!byname.empty()) {
+    nh->length += byname.size() + 1;
   }
   file.Write(nh, sizeof(net_header_rec));
   if (nh->list_len) {
-    file.Write(list, 2 * (nh->list_len));
+    file.Write(&list[0], sizeof(uint16_t) * (nh->list_len));
   }
-  if (byname && *byname) {
-    file.Write(byname, strlen(byname) + 1);
+  if (!byname.empty()) {
+    file.Write(byname);
+    char nul[1] = {0};
+    file.Write(nul, 1);
   }
   if (nh->length) {
-    file.Write(text, lNetHeaderSize);
+    file.Write(text);
   }
   file.Close();
 }
@@ -269,31 +208,35 @@ void giveup_timeslice() {
   sleep_for(milliseconds(100));
   yield();
 
-  if (!in_chatroom || !bChatLine) {
+  if (!a()->in_chatroom_ || !a()->chatline_) {
     if (inst_msg_waiting()) {
       process_inst_msgs();
     }
   }
 }
 
-char *stripfn(const char *pszFileName) {
+std::string stripfn(const std::string& file_name) {
+  return std::string(stripfn(file_name.c_str()));
+}
+
+char* stripfn(const char* file_name) {
   static char szStaticFileName[15];
-  char szTempFileName[ MAX_PATH ];
+  char szTempFileName[MAX_PATH];
 
-  WWIV_ASSERT(pszFileName);
+  WWIV_ASSERT(file_name);
 
-  int nSepIndex = -1;
-  for (int i = 0; i < wwiv::strings::GetStringLength(pszFileName); i++) {
-    if (pszFileName[i] == '\\' || pszFileName[i] == ':' || pszFileName[i] == '/') {
+  size_t nSepIndex = -1;
+  for (size_t i = 0; i < size(file_name); i++) {
+    if (file_name[i] == '\\' || file_name[i] == ':' || file_name[i] == '/') {
       nSepIndex = i;
     }
   }
   if (nSepIndex != -1) {
-    strcpy(szTempFileName, &(pszFileName[nSepIndex + 1]));
+    strcpy(szTempFileName, &(file_name[nSepIndex + 1]));
   } else {
-    strcpy(szTempFileName, pszFileName);
+    strcpy(szTempFileName, file_name);
   }
-  for (int i1 = 0; i1 < wwiv::strings::GetStringLength(szTempFileName); i1++) {
+  for (size_t i1 = 0; i1 < size(szTempFileName); i1++) {
     if (szTempFileName[i1] >= 'A' && szTempFileName[i1] <= 'Z') {
       szTempFileName[i1] = szTempFileName[i1] - 'A' + 'a';
     }
@@ -310,94 +253,56 @@ char *stripfn(const char *pszFileName) {
   return szStaticFileName;
 }
 
-void stripfn_inplace(char *pszFileName) {
-  strcpy(pszFileName, stripfn(pszFileName));
-}
+void stripfn_inplace(char* file_name) { strcpy(file_name, stripfn(file_name)); }
 
-void preload_subs() {
-  bool abort = false;
-
-  if (g_preloaded) {
-    return;
-  }
-
-  bout.nl();
-  bout << "|#1Caching message areas";
-  int i1 = 3;
-  for (session()->SetMessageAreaCacheNumber(0);
-       session()->GetMessageAreaCacheNumber() < session()->num_subs && !abort;
-       session()->SetMessageAreaCacheNumber(session()->GetMessageAreaCacheNumber() + 1)) {
-    if (!session()->m_SubDateCache[session()->GetMessageAreaCacheNumber()]) {
-      iscan1(session()->GetMessageAreaCacheNumber(), true);
-    }
-    bout << "\x03" << i1 << ".";
-    if ((session()->GetMessageAreaCacheNumber() % 5) == 4) {
-      i1++;
-      if (i1 == 4) {
-        i1++;
-      }
-      if (i1 == 10) {
-        i1 = 3;
-      }
-      bout << "\b\b\b\b\b";
-    }
-    checka(&abort);
-  }
-  if (!abort) {
-    bout << "|#1...done!\r\n";
-  }
-  bout.nl();
-  g_preloaded = true;
-}
-
-
-char *get_wildlist(char *pszFileMask) {
+char* get_wildlist(char* file_mask) {
   int mark = 0;
   char *pszPath, t;
-  WFindFile fnd;
 
-  WWIV_ASSERT(pszFileMask);
+  WWIV_ASSERT(file_mask);
 
-  if (!fnd.open(pszFileMask, 0)) {
+  FindFiles ff(file_mask, FindFilesType::any);
+  if (ff.empty()) {
     bout << "No files found\r\n";
-    pszFileMask[0] = '\0';
-    return pszFileMask;
-  } else {
-    bout.bprintf("%12.12s ", fnd.GetFileName());
+    file_mask[0] = '\0';
+    return file_mask;
   }
+  auto f = ff.begin();
+  bout.bprintf("%12.12s ", f->name.c_str());
 
-  if (strchr(pszFileMask, File::pathSeparatorChar) == nullptr) {
-    pszFileMask[0] = '\0';
+  if (strchr(file_mask, File::pathSeparatorChar) == nullptr) {
+    file_mask[0] = '\0';
   } else {
-    for (int i = 0; i < wwiv::strings::GetStringLength(pszFileMask); i++) {
-      if (pszFileMask[i] == File::pathSeparatorChar) {
+    for (int i = 0; i < size_int(file_mask); i++) {
+      if (file_mask[i] == File::pathSeparatorChar) {
         mark = i + 1;
       }
     }
   }
-  t = pszFileMask[mark];
-  pszFileMask[mark] = 0;
-  pszPath = pszFileMask;
-  pszFileMask[mark] = t;
-  t = static_cast<char>(wwiv::strings::GetStringLength(pszPath));
-  strcat(pszPath, fnd.GetFileName());
+  t = file_mask[mark];
+  file_mask[mark] = 0;
+  pszPath = file_mask;
+  file_mask[mark] = t;
+  t = static_cast<char>(size(pszPath));
+  strcat(pszPath, f->name.c_str());
   int i = 1;
   for (i = 1;; i++) {
     if (i % 5 == 0) {
       bout.nl();
     }
-    if (!fnd.next()) {
+    if (f == ff.end()) {
       break;
     }
-    bout.bprintf("%12.12s ", fnd.GetFileName());
-    if (bgetch() == SPACE) {
+    f++;
+    bout.bprintf("%12.12s ", f->name.c_str());
+    if (bout.getkey() == SPACE) {
       bout.nl();
       break;
     }
   }
   bout.nl();
   if (i == 1) {
-    bout << "One file found: " << fnd.GetFileName() << wwiv::endl;
+    bout << "One file found: " << f->name << wwiv::endl;
     bout << "Use this file? ";
     if (yesno()) {
       return pszPath;
@@ -408,24 +313,25 @@ char *get_wildlist(char *pszFileMask) {
   }
   pszPath[t] = '\0';
   bout << "Filename: ";
-  input(pszFileMask, 12, true);
-  strcat(pszPath, pszFileMask);
+  input(file_mask, 12, true);
+  strcat(pszPath, file_mask);
   return pszPath;
 }
 
-int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items, int xpos, int ypos, side_menu_colors * smc) {
+int side_menu(int* menu_pos, bool bNeedsRedraw, const vector<string>& menu_items, int xpos,
+              int ypos, side_menu_colors* smc) {
   static int positions[20], amount = 1;
 
   WWIV_ASSERT(menu_pos);
   WWIV_ASSERT(smc);
 
-  session()->localIO()->tleft(true);
+  a()->tleft(true);
 
   if (bNeedsRedraw) {
     amount = 1;
     positions[0] = xpos;
     for (const string& menu_item : menu_items) {
-      positions[amount] = positions[amount-1] + menu_item.length() + 2;
+      positions[amount] = positions[amount - 1] + menu_item.length() + 2;
       ++amount;
     }
 
@@ -433,19 +339,19 @@ int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items
     bout.SystemColor(smc->normal_menu_item);
 
     for (const string& menu_item : menu_items) {
-      if (hangup) {
+      if (a()->hangup_) {
         break;
       }
       bout.GotoXY(positions[x], ypos);
 
       if (*menu_pos == x) {
         bout.SystemColor(smc->current_highlight);
-        bputch(menu_item[0]);
+        bout.bputch(menu_item[0]);
         bout.SystemColor(smc->current_menu_item);
         bout.bputs(menu_item.substr(1));
       } else {
         bout.SystemColor(smc->normal_highlight);
-        bputch(menu_item[0]);
+        bout.bputch(menu_item[0]);
         bout.SystemColor(smc->normal_menu_item);
         bout.bputs(menu_item.substr(1));
       }
@@ -454,21 +360,22 @@ int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items
   }
   bout.SystemColor(smc->normal_menu_item);
 
-  while (!hangup) {
-    int event = get_kb_event(NOTNUMBERS);
+  while (!a()->hangup_) {
+    int event = bgetch_event(numlock_status_t::NOTNUMBERS);
     if (event < 128) {
       int x = 0;
       for (const string& menu_item : menu_items) {
-        if (event == wwiv::UpperCase<int>(menu_item[0]) || event == wwiv::LowerCase<int>(menu_item[0])) {
+        if (event == to_upper_case<int>(menu_item[0]) ||
+            event == to_lower_case<int>(menu_item[0])) {
           bout.GotoXY(positions[*menu_pos], ypos);
           bout.SystemColor(smc->normal_highlight);
-          bputch(menu_items[*menu_pos][0]);
+          bout.bputch(menu_items[*menu_pos][0]);
           bout.SystemColor(smc->normal_menu_item);
           bout.bputs(menu_items[*menu_pos].substr(1));
           *menu_pos = x;
           bout.SystemColor(smc->current_highlight);
           bout.GotoXY(positions[*menu_pos], ypos);
-          bputch(menu_items[*menu_pos][0]);
+          bout.bputch(menu_items[*menu_pos][0]);
           bout.SystemColor(smc->current_menu_item);
           bout.bputs(menu_items[*menu_pos].substr(1));
           bout.GotoXY(positions[*menu_pos], ypos);
@@ -482,17 +389,17 @@ int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items
       case COMMAND_LEFT:
         bout.GotoXY(positions[*menu_pos], ypos);
         bout.SystemColor(smc->normal_highlight);
-        bputch(menu_items[*menu_pos][0]);
+        bout.bputch(menu_items[*menu_pos][0]);
         bout.SystemColor(smc->normal_menu_item);
         bout.bputs(menu_items[*menu_pos].substr(1));
         if (!*menu_pos) {
           *menu_pos = menu_items.size() - 1;
         } else {
-          --* menu_pos;
+          --*menu_pos;
         }
         bout.SystemColor(smc->current_highlight);
         bout.GotoXY(positions[*menu_pos], ypos);
-        bputch(menu_items[*menu_pos][0]);
+        bout.bputch(menu_items[*menu_pos][0]);
         bout.SystemColor(smc->current_menu_item);
         bout.bputs(menu_items[*menu_pos].substr(1));
         bout.GotoXY(positions[*menu_pos], ypos);
@@ -501,17 +408,17 @@ int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items
       case COMMAND_RIGHT:
         bout.GotoXY(positions[*menu_pos], ypos);
         bout.SystemColor(smc->normal_highlight);
-        bputch(menu_items[*menu_pos][0]);
+        bout.bputch(menu_items[*menu_pos][0]);
         bout.SystemColor(smc->normal_menu_item);
         bout.bputs(menu_items[*menu_pos].substr(1));
         if (*menu_pos == static_cast<int>(menu_items.size() - 1)) {
           *menu_pos = 0;
         } else {
-          ++* menu_pos;
+          ++*menu_pos;
         }
         bout.SystemColor(smc->current_highlight);
         bout.GotoXY(positions[*menu_pos], ypos);
-        bputch(menu_items[*menu_pos][0]);
+        bout.bputch(menu_items[*menu_pos][0]);
         bout.SystemColor(smc->current_menu_item);
         bout.bputs(menu_items[*menu_pos].substr(1));
         bout.GotoXY(positions[*menu_pos], ypos);
@@ -524,107 +431,28 @@ int side_menu(int *menu_pos, bool bNeedsRedraw, const vector<string>& menu_items
   return 0;
 }
 
-slrec getslrec(int nSl) {
-  static int nCurSl = -1;
-  static slrec CurSlRec;
-
-  if (nSl == nCurSl) {
-    return CurSlRec;
-  }
-
-  wwiv::sdk::Config config;
-  if (!config.IsInitialized()) {
-    // Bad ju ju here.
-    application()->AbortBBS();
-  }
-  nCurSl = nSl;
-  CurSlRec = config.config()->sl[nSl];
-  return CurSlRec;
-}
-
-void WWIV_SetFileTime(const char* pszFileName, const time_t tTime) {
-  struct utimbuf utbuf;
-
-  utbuf.actime  = tTime;
-  utbuf.modtime = tTime;
-
-  WWIV_ASSERT(pszFileName);
-
-  utime(pszFileName, &utbuf);
-}
-
 bool okfsed() {
-  return (!okansi() ||
-          !session()->user()->GetDefaultEditor() ||
-          (session()->user()->GetDefaultEditor() > session()->GetNumberOfEditors()))
-         ? false : true;
+  return okansi() && a()->user()->GetDefaultEditor() > 0 &&
+         a()->user()->GetDefaultEditor() <= wwiv::stl::size_int(a()->editors);
+}
+template <class _Ty>
+inline const _Ty& in_range(const _Ty& minValue, const _Ty& maxValue, const _Ty& value) {
+  return std::max(std::min(maxValue, value), minValue);
 }
 
-
-//************************************************
-// Purpose      : Properizes msg.daten to a date/time string
-// Parameters   : time_t daten    - daten attribute of a message
-//                char* mode    - mode string
-//                              - W = Day of the week
-//                              - D = Date
-//                              - T = Time
-//                              - Z = Zone
-//                              - Y = Year
-//                              - Modes can be combined i.e
-//                                W, D, T, Z, WDT, TZ, DTZ
-//                char* delim   - delimiter that appears before time
-// Returns      : Properized date/time string as requested
-// Author(s)    : WSS
-//************************************************
-std::string W_DateString(time_t tDateTime, const std::string& origMode , const std::string& timeDelim) {
-  char    s[40];                  // formattable string
-  std::string str;
-  struct tm * pTm = localtime(&tDateTime);
-
-  std::string mode = origMode;
-  StringUpperCase(&mode);
-
-  bool first = true;
-  // cycle thru mode string
-  for (auto& ch : mode) {
-    if (!first) {
-      str += " ";
-    }
-    first = false;
-    switch (ch) {
-    case 'W':
-      strftime(s, 40, "%A,", pTm);
-      break;
-    case 'D':
-      strftime(s, 40, "%B %d, %Y", pTm);
-      break;
-    case 'T':
-      if (timeDelim.length() > 0) {
-        // if there is a delimiter, add it with spaces
-        str += timeDelim;
-        str += " ";
-      }
-
-      // which form of the clock is in use?
-      if (session()->user()->IsUse24HourClock()) {
-        strftime(s, 40, "%H:%M", pTm);
-      } else {
-        strftime(s, 40, "%I:%M %p", pTm);
-      }
-      break;
-    case 'Z':
-      strftime(s, 40, "[%Z]", pTm);
-      break;
-    case 'Y':
-      strftime(s, 40, "%Y", pTm);
-      break;
-    } //end switch(szMode2[i])
-    // add the component
-    str += s;
-  } //end for(i = 0;....)
-  return std::string(str.c_str());
-} //end W_DateString
-
-template<class _Ty> inline const _Ty& in_range(const _Ty& minValue, const _Ty& maxValue, const _Ty& value) {
-  return std::max(std::min(maxValue, value), minValue);
+int ansir_to_flags(uint8_t ansir) {
+  int flags = 0;
+  if (!(ansir & ansir_no_DOS)) {
+    flags |= EFLAG_COMIO;
+  }
+  if (ansir & ansir_emulate_fossil) {
+    flags |= EFLAG_FOSSIL;
+  }
+  if (ansir & ansir_temp_dir) {
+    flags |= EFLAG_TEMP_DIR;
+  }
+  if (ansir & ansir_stdio) {
+    flags |= EFLAG_STDIO;
+  }
+  return flags;
 }

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,29 +19,40 @@
 
 #include <chrono>
 
+#include "bbs/bbs.h"
+#include "bbs/bgetch.h"
+#include "bbs/com.h"
+#include "bbs/instmsg.h"
+#include "local_io/keycodes.h"
 #include "bbs/pause.h"
-#include "bbs/keycodes.h"
-#include "bbs/wwiv.h"
+#include "bbs/utility.h"
+
+#include "core/datetime.h"
 #include "core/os.h"
 #include "core/strings.h"
 
 extern char str_pause[];
 
 using std::chrono::milliseconds;
+using namespace wwiv::core;
 using namespace wwiv::os;
+using namespace wwiv::sdk;
+using namespace wwiv::strings;
+
+int nsp;
 
 namespace wwiv {
 namespace bbs {
 
 TempDisablePause::TempDisablePause() : wwiv::core::Transaction([] {
-    if (g_flags & g_flag_disable_pause) {
-      g_flags &= ~g_flag_disable_pause;
-      session()->user()->SetStatusFlag(WUser::pauseOnPage);
+    if (a()->context().disable_pause()) {
+      a()->context().disable_pause(false);
+      a()->user()->SetStatusFlag(User::pauseOnPage);
     }
   }, nullptr) {
-  if (session()->user()->HasPause()) {
-    g_flags |= g_flag_disable_pause;
-    session()->user()->ClearStatusFlag(WUser::pauseOnPage);
+  if (a()->user()->HasPause()) {
+    a()->context().disable_pause(true);
+    a()->user()->ClearStatusFlag(User::pauseOnPage);
   }
 }
 
@@ -50,12 +61,12 @@ TempDisablePause::TempDisablePause() : wwiv::core::Transaction([] {
 
 static char GetKeyForPause() {
   char ch = 0;
-  while (ch == 0 && !hangup) {
+  while (ch == 0 && !a()->hangup_) {
     ch = bgetch();
     sleep_for(milliseconds(50));
     CheckForHangup();
   }
-  int nKey = wwiv::UpperCase<int>(ch);
+  int nKey = to_upper_case<int>(ch);
   switch (nKey) {
   case ESC:
   case 'Q':
@@ -66,9 +77,9 @@ static char GetKeyForPause() {
     break;
   case 'C':
   case '=':
-    if (session()->user()->HasPause()) {
+    if (a()->user()->HasPause()) {
       nsp = 1;
-      session()->user()->ToggleStatusFlag(WUser::pauseOnPage);
+      a()->user()->ToggleStatusFlag(User::pauseOnPage);
     }
     break;
   default:
@@ -76,74 +87,60 @@ static char GetKeyForPause() {
   }
   return ch;
 }
+
 // This will pause output, displaying the [PAUSE] message, and wait a key to be hit.
 void pausescr() {
-  int i1, warned;
-  int i = 0;
-  char s[81];
-  char ch;
-  double ttotal;
-  time_t tstart, tstop;
-
-  if (x_only) {
-    return;
-  }
-
   nsp = 0;
-
-  int oiia = setiia(0);
-
+  auto oiia = setiia(std::chrono::milliseconds(0));
   char* ss = str_pause;
+  int i1;
   int i2 = i1 = strlen(ss);
+  bool com_freeze = a()->context().incom();
 
-  bool com_freeze = incom;
-
-  if (!incom && outcom) {
-    incom = true;
+  if (!a()->context().incom() && a()->context().outcom()) {
+    a()->context().incom(true);
   }
 
   if (okansi()) {
     bout.ResetColors();
 
     i1 = strlen(stripcolors(ss));
-    i = curatr;
-    bout.SystemColor(session()->user()->HasColor() ? session()->user()->GetColor(
-                                     3) :
-                                   session()->user()->GetBWColor(3));
-    bout << ss << "\x1b[" << i1 << "D";
+    auto i = bout.curatr();
+    bout.SystemColor(a()->user()->color(3));
+    bout << ss;
+    bout.Left(i1);
     bout.SystemColor(i);
 
-    time(&tstart);
+    auto tstart = time_t_now();
 
-    lines_listed = 0;
-    warned = 0;
+    bout.clear_lines_listed();
+    int warned = 0;
+    char ch;
     do {
-      while (!bkbhit() && !hangup) {
-        time(&tstop);
-        ttotal = difftime(tstop, tstart);
+      while (!bkbhit() && !a()->hangup_) {
+        auto tstop = time_t_now();
+        auto ttotal = difftime(tstop, tstart);
         if (ttotal == 120) {
           if (!warned) {
             warned = 1;
-            bputch(CG);
-            bout.SystemColor(session()->user()->HasColor() ? session()->user()->GetColor(
-                                             6) :
-                                           session()->user()->GetBWColor(6));
+            bout.bputch(CG);
+            bout.SystemColor(a()->user()->color(6));
             bout << ss;
             for (int i3 = 0; i3 < i2; i3++) {
-              if (s[i3] == 3 && i1 > 1) {
+              if (ss[i3] == 3 && i1 > 1) {
                 i1 -= 2;
               }
             }
-            bout << "\x1b[" << i1 << "D";
+            bout.Left(i1);
             bout.SystemColor(i);
           }
         } else {
           if (ttotal > 180) {
-            bputch(CG);
+            bout.bputch(CG);
             for (int i3 = 0; i3 < i1; i3++) {
-              bputch(' ');
+              bout.bputch(' ');
             }
-            bout << "\x1b[" << i1 << "D";
+            bout.Left(i1);
             bout.SystemColor(i);
             setiia(oiia);
             return;
@@ -153,11 +150,11 @@ void pausescr() {
         CheckForHangup();
       }
       ch = GetKeyForPause();
-    } while (!ch && !hangup);
+    } while (!ch && !a()->hangup_);
     for (int i3 = 0; i3 < i1; i3++) {
-      bputch(' ');
+      bout.bputch(' ');
     }
-    bout << "\x1b[" << i1 << "D";
+    bout.Left(i1);
     bout.SystemColor(i);
     setiia(oiia);
 
@@ -176,8 +173,15 @@ void pausescr() {
   }
 
   if (!com_freeze) {
-    incom = false;
+    a()->context().incom(false);
   }
 }
 
+void resetnsp() {
+  if (nsp == 1 && !(a()->user()->HasPause())) {
+    a()->user()->ToggleStatusFlag(User::pauseOnPage);
+  }
+  nsp = 0;
+}
 
+void clearnsp() { nsp = 0; }

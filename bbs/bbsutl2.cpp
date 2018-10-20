@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,32 +16,23 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include <sstream>
 #include <string>
 #include <vector>
 
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/com.h"
 #include "core/inifile.h"
+#include "core/stl.h"
 #include "core/strings.h"
+#include "sdk/filenames.h"
 
 using std::string;
 using std::vector;
 using wwiv::core::IniFile;
 using wwiv::core::FilePath;
-using wwiv::strings::StringPrintf;
-
-/**
- * Display character x repeated amount times in nColor, and if bAddNL is true
- * display a new line character.
- * @param x The Character to repeat
- * @param amount The number of times to repeat x
- * @param nColor the color in which to display the string
- * @param bAddNL if true, add a new line character at the end.
- */
-void repeat_char(char x, int amount, int nColor) {
-  bout.Color(nColor);
-  bout << string(amount, x);
-  bout.nl();
-}
+using namespace wwiv::stl;
+using namespace wwiv::strings;
 
 /**
  * Returns the computer type string for computer type number num.
@@ -67,70 +58,21 @@ std::string ctypes(int num) {
     "Other",
   };
 
-  IniFile iniFile(FilePath(application()->GetHomeDir(), WWIV_INI), "CTYPES");
+  IniFile iniFile(FilePath(a()->bbsdir(), WWIV_INI), {"CTYPES"});
   if (iniFile.IsOpen()) {
-    const string comptype = StringPrintf("COMP_TYPE[%d]", num + 1);
-    const char *ss = iniFile.GetValue(comptype.c_str());
-    if (ss && *ss) {
-      return std::string(ss);
-    }
-    return "";
+    return iniFile.value<string>(StringPrintf("COMP_TYPE[%d]", num + 1));
   }
-  if ((num < 0) || (num > static_cast<int>(default_ctypes.size()))) {
+  if (num < 0 || num > size_int(default_ctypes)) {
     return "";
   }
   return default_ctypes[num];
 }
 
-
-/**
- * Displays s which checking for abort and next
- * @see checka
- * <em>Note: osan means Output String And Next</em>
- *
- * @param pszText The text to display
- * @param abort The abort flag (Output Parameter)
- * @param next The next flag (Output Parameter)
- */
-void osan(const string& text, bool *abort, bool *next) {
-  CheckForHangup();
-  checka(abort, next);
-
-  for (auto ch : text) {
-    bputch(ch, true);     // RF20020927 use buffered bputch
-    if (checka(abort, next) || hangup) {
-      break;
-    }
-  }
-  FlushOutComChBuffer();
-}
-
-/**
- * Displays pszText in color nWWIVColor which checking for abort and next with a nl
- * @see checka
- * <em>Note: osan means Output String And Next</em>
- *
- * @param nWWIVColor The WWIV color code to use.
- * @param pszText The text to display
- * @param abort The abort flag (Output Parameter)
- * @param next The next flag (Output Parameter)
- */
-void plan(int nWWIVColor, const string& text, bool *abort, bool *next) {
-  bout.Color(nWWIVColor);
-  osan(text, abort, next);
-  if (!(*abort)) {
-    bout.nl();
-  }
-}
-
-/**
- * @todo Document this
- */
 string strip_to_node(const string& txt) {
   std::ostringstream os;
   if (txt.find("@") != string::npos) {
     bool ok = true;
-    for (string::const_iterator i = txt.begin(); i != txt.end(); i++) {
+    for (auto i = txt.begin(); i != txt.end(); i++) {
       if (ok) {
         os << *i;
       }
@@ -138,7 +80,7 @@ string strip_to_node(const string& txt) {
         ok = false;
       }
     }
-    return string(os.str());
+    return os.str();
   } else if (txt.find("AT") != string::npos) {
     bool ok = true;
     for (string::const_iterator i = txt.begin() + 2; i != txt.end(); i++) {
@@ -149,7 +91,7 @@ string strip_to_node(const string& txt) {
         ok = false;
       }
     }
-    return string(os.str());
+    return os.str();
   }
-  return string(txt);
+  return txt;
 }

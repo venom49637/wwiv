@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,7 +18,6 @@
 #ifndef __INCLUDED_BBS_ASV_H__
 #define __INCLUDED_BBS_ASV_H__
 
-void asv();
 void set_autoval(int n);
 
 #endif  // __INCLUDED_BBS_ASV_H__

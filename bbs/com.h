@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,15 +18,14 @@
 #ifndef __INCLUDED_BBS_COM_H__
 #define __INCLUDED_BBS_COM_H__
 
-void RestoreCurrentLine(const char *cl, const char *atr, const char *xl, const char *cc);
-void dump();
+#include <string>
+
 bool CheckForHangup();
-void makeansi(int attr, char *pszOutBuffer, bool forceit);
-void resetnsp();
-char getkey();
+void Hangup();
 bool yesno();
 bool noyes();
 char ynq();
-char onek(const char *pszAllowableChars, bool bAutoMpl = false);
+char onek(const std::string& allowable, bool auto_mpl = false);
+char onek_ncr(const std::string& allowable);
 
 #endif  // __INCLUDED_BBS_COM_H__

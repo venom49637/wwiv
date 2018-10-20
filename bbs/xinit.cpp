@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,6 +17,7 @@
 /*                                                                        */
 /**************************************************************************/
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -25,976 +26,631 @@
 #include <direct.h>
 #else
 #include <unistd.h>
-#endif  // _WIN32
+#endif // _WIN32
 
-#include "bbs/wwiv.h"
+#include "bbs/arword.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/conf.h"
+#include "bbs/connect1.h"
 #include "bbs/datetime.h"
+#include "bbs/events.h"
+#include "bbs/execexternal.h"
 #include "bbs/instmsg.h"
+#include "bbs/message_file.h"
 #include "bbs/netsup.h"
 #include "bbs/pause.h"
-#include "bbs/wconstants.h"
-#include "bbs/wstatus.h"
+#include "bbs/sysoplog.h"
+#include "bbs/utility.h"
+
+#include "local_io/wconstants.h"
+#include "bbs/workspace.h"
+#include "core/datafile.h"
 #include "core/inifile.h"
-#include "core/strings.h"
+#include "core/log.h"
 #include "core/os.h"
+#include "core/strings.h"
 #include "core/textfile.h"
+#include "core/version.h"
 #include "core/wwivassert.h"
 #include "core/wwivport.h"
+#include "sdk/status.h"
 
 #include "sdk/config.h"
+#include "sdk/filenames.h"
+#include "sdk/msgapi/message_api_wwiv.h"
+#include "sdk/msgapi/msgapi.h"
+#include "sdk/names.h"
+#include "sdk/networks.h"
+#include "sdk/subxtr.h"
 
 // Additional INI file function and structure
 #include "bbs/xinitini.h"
 
-#ifdef __unix__
-#define XINIT_PRINTF( x )
-#else
-#define XINIT_PRINTF( x ) std::clog << '\xFE' << ' ' << ( x )  << std::endl
-#endif // __unix__
-
 struct ini_flags_type {
-  int     strnum;
-  bool    sense;
+  const char* strnum;
   uint32_t value;
 };
 
 using std::string;
+using std::chrono::duration;
+using std::chrono::duration_cast;
+using std::chrono::seconds;
 using wwiv::bbs::TempDisablePause;
 using namespace wwiv::core;
 using namespace wwiv::os;
 using namespace wwiv::strings;
+using namespace wwiv::sdk;
 
-uint32_t GetFlagsFromIniFile(IniFile *pIniFile, ini_flags_type * fs, int nFlagNumber, uint32_t flags);
+template <typename T>
+static T GetFlagsFromIniFile(IniFile& ini, const std::vector<ini_flags_type>& flag_definitions,
+                             T flags) {
+  for (const auto& fs : flag_definitions) {
+    const std::string key = fs.strnum;
+    if (key.empty()) {
+      continue;
+    }
+    const auto val = ini.value<string>(key);
+    if (val.empty()) {
+      continue;
+    }
+    if (ini.value<bool>(key)) {
+      flags |= fs.value;
+    } else {
+      flags &= ~fs.value;
+    }
+  }
+  return flags;
+}
 
+void StatusManagerCallback(int i) {
+  switch (i) {
+  case WStatus::fileChangeNames: {
+    // re-read names.lst
+    if (a()->names()) {
+      // We may not have the BBS initialized yet, so only
+      // re-read the names file if it's changed from another node.
+      a()->names()->Load();
+    }
+  } break;
+  case WStatus::fileChangeUpload:
+    break;
+  case WStatus::fileChangePosts:
+    a()->subchg = 1;
+    break;
+  case WStatus::fileChangeEmail:
+    a()->emchg_ = true;
+    break;
+  case WStatus::fileChangeNet: {
+    set_net_num(a()->net_num());
+  } break;
+  }
+}
 
 // Turns a string into a bitmapped unsigned short flag for use with
 // ExecuteExternalProgram calls.
-unsigned short WApplication::str2spawnopt(const char *s) {
-  char ts[ 255 ];
+static uint16_t str2spawnopt(const std::string& s) {
+  uint16_t return_val = EFLAG_NONE;
+  auto ts = s;
+  StringUpperCase(&ts);
 
-  unsigned short return_val = 0;
-  strcpy(ts, s);
-  strupr(ts);
-
-  if (strstr(ts, "NOHUP") != nullptr) {
+  if (ts.find("NOHUP") != std::string::npos) {
     return_val |= EFLAG_NOHUP;
   }
-  if (strstr(ts, "COMIO") != nullptr) {
+  if (ts.find("COMIP") != std::string::npos) {
     return_val |= EFLAG_COMIO;
   }
-  if (strstr(ts, "FOSSIL") != nullptr) {
+  if (ts.find("FOSSIL") != std::string::npos) {
     return_val |= EFLAG_FOSSIL; // RF20020929
   }
-  if (strstr(ts, "NETPROG") != nullptr) {
+  if (ts.find("NETPROG") != std::string::npos) {
     return_val |= EFLAG_NETPROG;
+  }
+  if (ts.find("STDIO") != std::string::npos) {
+    return_val |= EFLAG_STDIO;
   }
   return return_val;
 }
 
-
 // Takes string s and creates restrict val
-unsigned short WApplication::str2restrict(const char *s) {
-  const char *rs = restrict_string;
+static uint16_t str2restrict(const std::string& s) {
   char s1[81];
 
-  strcpy(s1, s);
+  to_char_array(s1, s);
   strupr(s1);
-  int r = 0;
-  for (int i = strlen(rs) - 1; i >= 0; i--) {
-    if (strchr(s1, rs[i])) {
+  uint16_t r = 0;
+  for (int i = strlen(restrict_string) - 1; i >= 0; i--) {
+    if (strchr(s1, restrict_string[i])) {
       r |= (1 << i);
     }
   }
 
-  return static_cast< short >(r);
+  return r;
 }
-
-// begin callback addition
-
-unsigned char WApplication::stryn2tf(const char *s) {
-  char ch = wwiv::UpperCase<char>(*s);
-
-  char yesChar = *(YesNoString(true));
-  if (ch == yesChar || ch == 1 || ch == '1' || ch == 'T') {
-    return 1;
-  }
-  return 0;
-}
-
-
-// end callback addition
-
-#define OFFOF(x) static_cast<int16_t>(reinterpret_cast<long>(&session()->user()->data.x) - reinterpret_cast<long>(&session()->user()->data))
 
 // Reads WWIV.INI info from [WWIV] subsection, overrides some config.dat
 // settings (as appropriate), updates config.dat with those values. Also
 // tries to read settings from [WWIV-<instnum>] subsection - this overrides
 // those in [WWIV] subsection.
 
-
-static unsigned char nucol[] = {7, 11, 14, 5, 31, 2, 12, 9, 6, 3};
-static unsigned char nucolbw[] = {7, 15, 15, 15, 112, 15, 15, 7, 7, 7};
-
-
-struct eventinfo_t {
-  const char *name;
-  unsigned short eflags;
-};
-
 // See #defines SPAWNOPT_XXXX in vardec.h for these.
-static eventinfo_t eventinfo[] = {
-  {"TIMED",         EFLAG_NONE},
-  {"NEWUSER",       EFLAG_NONE },
-  {"BEGINDAY",      EFLAG_NONE },
-  {"LOGON",         EFLAG_NONE},
-  {"ULCHK",         EFLAG_NOHUP},
-  {"CHAT",          EFLAG_FOSSIL},  // UNUSED (5)
-  {"PROT_SINGLE",   EFLAG_NONE },
-  {"PROT_BATCH",    EFLAG_NONE},
-  {"CHAT",          EFLAG_NONE },
-  {"ARCH_E",        EFLAG_NONE},
-  {"ARCH_L",        EFLAG_NONE},
-  {"ARCH_A",        EFLAG_NONE},
-  {"ARCH_D",        EFLAG_NONE},
-  {"ARCH_K",        EFLAG_NONE},
-  {"ARCH_T",        EFLAG_NONE},
-  {"NET_CMD1",      EFLAG_NONE},
-  {"NET_CMD2",      EFLAG_NETPROG},
-  {"LOGOFF",        EFLAG_NONE},
-  {"",              EFLAG_NONE}, // UNUSED (18)
-  {"NETWORK",       EFLAG_NONE},
+static std::map<std::string, uint16_t> eventinfo = {
+    {"TIMED", EFLAG_NONE},       {"NEWUSER", EFLAG_NONE},     {"BEGINDAY", EFLAG_NONE},
+    {"LOGON", EFLAG_NONE},       {"ULCHK", EFLAG_NOHUP},      {"CHAT", EFLAG_FOSSIL}, // UNUSED (5)
+    {"PROT_SINGLE", EFLAG_NONE}, {"PROT_BATCH", EFLAG_NONE},  {"CHAT", EFLAG_NONE},
+    {"ARCH_E", EFLAG_NONE},      {"ARCH_L", EFLAG_NONE},      {"ARCH_A", EFLAG_NONE},
+    {"ARCH_D", EFLAG_NONE},      {"ARCH_K", EFLAG_NONE},      {"ARCH_T", EFLAG_NONE},
+    {"NET_CMD1", EFLAG_NETPROG}, {"NET_CMD2", EFLAG_NETPROG}, {"LOGOFF", EFLAG_NONE},
+    {"NETWORK", EFLAG_NETPROG},
 };
 
-static const char *get_key_str(int n, const char *index = nullptr) {
-  static char str[255];
-  if (!index) {
-    return INI_OPTIONS_ARRAY[n];
-  }
-  sprintf(str, "%s[%s]", INI_OPTIONS_ARRAY[ n ], index);
-  return str;
+// TODO(rushfan): If we nee this elsewhere add it into IniFile
+static std::string to_array_key(const std::string& n, const std::string& index) {
+  return StrCat(n, "[", index, "]");
 }
 
-static void set_string(IniFile* ini, int key_idx, string* out) {
-  const char *s = ini->GetValue(get_key_str(key_idx));
-  if (s) {
-    out->assign(s);
-  }
-}
-
-#define INI_INIT_STR(n, f) { set_string(ini, n, &syscfg.f); }
-
-#define INI_GET_ASV(s, f, func, d) \
-{const char* ss; if ((ss=ini->GetValue(get_key_str(INI_STR_SIMPLE_ASV,s)))!=nullptr) session()->asv.f = func (ss); else session()->asv.f = d;}
-#define INI_GET_CALLBACK(s, f, func, d) \
-{const char* ss; if ((ss=ini->GetValue(get_key_str(INI_STR_CALLBACK,s)))!=nullptr) \
-    session()->cbv.f = func (ss); \
-    else session()->cbv.f = d;}
-
-#define NEL(s) (sizeof(s) / sizeof((s)[0]))
-
-static ini_flags_type sysinfo_flags[] = {
-  {INI_STR_FORCE_FBACK, false, OP_FLAGS_FORCE_NEWUSER_FEEDBACK},
-  {INI_STR_CHECK_DUP_PHONES, false, OP_FLAGS_CHECK_DUPE_PHONENUM},
-  {INI_STR_HANGUP_DUP_PHONES, false, OP_FLAGS_HANGUP_DUPE_PHONENUM},
-  {INI_STR_USE_SIMPLE_ASV, false, OP_FLAGS_SIMPLE_ASV},
-  {INI_STR_POSTTIME_COMPENS, false, OP_FLAGS_POSTTIME_COMPENSATE},
-  {INI_STR_SHOW_HIER, false, OP_FLAGS_SHOW_HIER},
-  {INI_STR_IDZ_DESC, false, OP_FLAGS_IDZ_DESC},
-  {INI_STR_SETLDATE, false, OP_FLAGS_SETLDATE},
-  {INI_STR_SLASH_SZ, false, OP_FLAGS_SLASH_SZ},
-  {INI_STR_READ_CD_IDZ, false, OP_FLAGS_READ_CD_IDZ},
-  {INI_STR_FSED_EXT_DESC, false, OP_FLAGS_FSED_EXT_DESC},
-  {INI_STR_FAST_TAG_RELIST, false, OP_FLAGS_FAST_TAG_RELIST},
-  {INI_STR_MAIL_PROMPT, false, OP_FLAGS_MAIL_PROMPT},
-  {INI_STR_SHOW_CITY_ST, false, OP_FLAGS_SHOW_CITY_ST},
-  {INI_STR_NO_EASY_DL, false, OP_FLAGS_NO_EASY_DL},
-  {INI_STR_NEW_EXTRACT, false, OP_FLAGS_NEW_EXTRACT},
-  {INI_STR_FAST_SEARCH, false, OP_FLAGS_FAST_SEARCH},
-  {INI_STR_NET_CALLOUT, false, OP_FLAGS_NET_CALLOUT},
-  {INI_STR_WFC_SCREEN, false, OP_FLAGS_WFC_SCREEN},
-  {INI_STR_FIDO_PROCESS, false, OP_FLAGS_FIDO_PROCESS},
-  {INI_STR_USER_REGISTRATION, false, OP_FLAGS_USER_REGISTRATION},
-  {INI_STR_MSG_TAG, false, OP_FLAGS_MSG_TAG},
-  {INI_STR_CHAIN_REG, false, OP_FLAGS_CHAIN_REG},
-  {INI_STR_CAN_SAVE_SSM, false, OP_FLAGS_CAN_SAVE_SSM},
-  {INI_STR_EXTRA_COLOR, false, OP_FLAGS_EXTRA_COLOR},
-  {INI_STR_THREAD_SUBS, false, OP_FLAGS_THREAD_SUBS},
-  {INI_STR_USE_CALLBACK, false, OP_FLAGS_CALLBACK},
-  {INI_STR_USE_VOICE_VAL, false, OP_FLAGS_VOICE_VAL},
-  {INI_STR_USE_ADVANCED_ASV, false, OP_FLAGS_ADV_ASV},
-  {INI_STR_USE_FORCE_SCAN, false, OP_FLAGS_USE_FORCESCAN},
-  {INI_STR_NEWUSER_MIN, false, OP_FLAGS_NEWUSER_MIN},
-
-};
-
-static ini_flags_type sysconfig_flags[] = {
-  {INI_STR_LOCAL_SYSOP, true, sysconfig_no_local},
-  {INI_STR_2WAY_CHAT, false, sysconfig_2_way},
-  {INI_STR_NO_NEWUSER_FEEDBACK, false, sysconfig_no_newuser_feedback},
-  {INI_STR_TITLEBAR, false, sysconfig_titlebar},
-  {INI_STR_LOG_DOWNLOADS, false, sysconfig_log_dl},
-  {INI_STR_CLOSE_XFER, false, sysconfig_no_xfer},
-  {INI_STR_ALL_UL_TO_SYSOP, false, sysconfig_all_sysop},
-  {INI_STR_BEEP_CHAT, true, sysconfig_no_beep},
-  {INI_STR_TWO_COLOR_CHAT, false, sysconfig_two_color},
-  {INI_STR_ALLOW_ALIASES, true, sysconfig_no_alias},
-  {INI_STR_USE_LIST, false, sysconfig_list},
-  {INI_STR_EXTENDED_USERINFO, false, sysconfig_extended_info},
-  {INI_STR_FREE_PHONE, false, sysconfig_free_phone},
-  {INI_STR_ENABLE_PIPES, false, sysconfig_enable_pipes},
-  {INI_STR_ENABLE_MCI, false, sysconfig_enable_mci},
-};
-
-IniFile* WApplication::ReadINIFile() {
-  // Setup default session()-> data
-  for (int nTempColorNum = 0; nTempColorNum < 10; nTempColorNum++) {
-    session()->newuser_colors[ nTempColorNum ] = nucol[ nTempColorNum ];
-    session()->newuser_bwcolors[ nTempColorNum ] = nucolbw[ nTempColorNum ];
-  }
-
-  session()->SetTopScreenColor(31);
-  session()->SetUserEditorColor(31);
-  session()->SetEditLineColor(112);
-  session()->SetChatNameSelectionColor(95);
-  session()->SetMessageColor(2);
-  session()->max_batch = 50;
-  session()->max_extend_lines = 10;
-  session()->max_chains = 50;
-  session()->max_gfilesec = 32;
-  session()->mail_who_field_len = 35;
-  session()->SetBeginDayNodeNumber(1);
-  session()->SetUseInternalZmodem(true);
-  session()->SetExecChildProcessWaitTime(500);
-  session()->SetExecLogSyncFoss(true);
-  session()->SetNewScanAtLogin(false);
-
-  for (size_t nTempEventNum = 0; nTempEventNum < NEL(eventinfo); nTempEventNum++) {
-    application()->spawn_opts[ nTempEventNum ] = eventinfo[ nTempEventNum ].eflags;
-  }
-
-  // put in default WApplication::flags
-  application()->SetConfigFlags(OP_FLAGS_FIDO_PROCESS);
-
-  if (ok_modem_stuff) {
-    application()->SetConfigFlag(OP_FLAGS_NET_CALLOUT);
+template <typename A>
+void ini_get_asv(const IniFile& ini, const std::string& s, A& f,
+                 std::function<A(const std::string&)> func, A d) {
+  const auto ss = ini.value<std::string>(StrCat(INI_STR_SIMPLE_ASV, "[", s, "]"));
+  if (!ss.empty()) {
+    f = func(ss);
   } else {
-    application()->ClearConfigFlag(OP_FLAGS_NET_CALLOUT);
+    f = d;
   }
-
-  // initialize ini communication
-  const string instance_name = StringPrintf("WWIV-%u", GetInstanceNumber());
-  IniFile* ini(new IniFile(FilePath(application()->GetHomeDir(), WWIV_INI), instance_name, INI_TAG));
-  if (ini->IsOpen()) {
-    // found something
-    // pull out event flags
-    for (size_t nTempSpawnOptNum = 0; nTempSpawnOptNum < NEL(application()->spawn_opts); nTempSpawnOptNum++) {
-      const string key_name = StringPrintf("%s[%s]", get_key_str(INI_STR_SPAWNOPT), eventinfo[nTempSpawnOptNum].name);
-      const char *ss = ini->GetValue(key_name);
-      if (ss != nullptr) {
-        application()->spawn_opts[nTempSpawnOptNum] = str2spawnopt(ss);
-      }
-    }
-
-    // pull out newuser colors
-    for (int nTempColorNum = 0; nTempColorNum < 10; nTempColorNum++) {
-      string key_name = StringPrintf("%s[%d]", get_key_str(INI_STR_NUCOLOR), nTempColorNum);
-      const char *ss = ini->GetValue(key_name);
-      if (ss != nullptr && atoi(ss) > 0) {
-        session()->newuser_colors[nTempColorNum] = StringToUnsignedChar(ss);
-      }
-      key_name = StringPrintf("%s[%d]", get_key_str(INI_STR_NUCOLOR), nTempColorNum);
-      ss = ini->GetValue(key_name);
-      if (ss != nullptr && atoi(ss) > 0) {
-        session()->newuser_bwcolors[nTempColorNum] = StringToUnsignedChar(ss);
-      }
-    }
-
-    session()->SetMessageThreadingEnabled(ini->GetBooleanValue("THREAD_SUBS"));
-    session()->SetCarbonCopyEnabled(ini->GetBooleanValue("ALLOW_CC_BCC"));
-
-    // pull out sysop-side colors
-    session()->SetTopScreenColor(ini->GetNumericValue(get_key_str(INI_STR_TOPCOLOR),
-                                    session()->GetTopScreenColor()));
-    session()->SetUserEditorColor(ini->GetNumericValue(get_key_str(INI_STR_F1COLOR),
-                                     session()->GetUserEditorColor()));
-    session()->SetEditLineColor(ini->GetNumericValue(get_key_str(INI_STR_EDITLINECOLOR),
-                                   session()->GetEditLineColor()));
-    session()->SetChatNameSelectionColor(ini->GetNumericValue(get_key_str(INI_STR_CHATSELCOLOR),
-                                            session()->GetChatNameSelectionColor()));
-
-    // pull out sizing options
-    session()->max_batch = ini->GetNumericValue(get_key_str(INI_STR_MAX_BATCH), session()->max_batch);
-    session()->max_extend_lines = ini->GetNumericValue(get_key_str(INI_STR_MAX_EXTEND_LINES),
-                                     session()->max_extend_lines);
-    session()->max_chains = ini->GetNumericValue(get_key_str(INI_STR_MAX_CHAINS), session()->max_chains);
-    session()->max_gfilesec = ini->GetNumericValue(get_key_str(INI_STR_MAX_GFILESEC), session()->max_gfilesec);
-
-    // pull out strings
-    INI_INIT_STR(INI_STR_UPLOAD_CMD, upload_cmd);
-    INI_INIT_STR(INI_STR_BEGINDAY_CMD, beginday_cmd);
-    INI_INIT_STR(INI_STR_NEWUSER_CMD, newuser_cmd);
-    INI_INIT_STR(INI_STR_LOGON_CMD, logon_cmd);
-
-    session()->m_nForcedReadSubNumber = ini->GetNumericValue(get_key_str(INI_STR_FORCE_SCAN_SUBNUM),
-                                           session()->m_nForcedReadSubNumber);
-    session()->m_bInternalZmodem = ini->GetBooleanValue(get_key_str(INI_STR_INTERNALZMODEM),
-                                      session()->m_bInternalZmodem);
-    session()->m_bNewScanAtLogin = ini->GetBooleanValue(get_key_str(INI_STR_NEW_SCAN_AT_LOGIN),
-                                      session()->m_bNewScanAtLogin);
-
-    session()->m_bExecLogSyncFoss = ini->GetBooleanValue(get_key_str(INI_STR_EXEC_LOG_SYNCFOSS),
-                                       session()->m_bExecLogSyncFoss);
-    session()->m_nExecChildProcessWaitTime = ini->GetNumericValue(get_key_str(INI_STR_EXEC_CHILD_WAIT_TIME),
-        session()->m_nExecChildProcessWaitTime);
-
-    session()->SetBeginDayNodeNumber(ini->GetNumericValue(get_key_str(INI_STR_BEGINDAYNODENUMBER),
-                                        session()->GetBeginDayNodeNumber()));
-
-    // pull out sysinfo_flags
-    application()->SetConfigFlags(GetFlagsFromIniFile(ini, sysinfo_flags, NEL(sysinfo_flags),
-                                     application()->GetConfigFlags()));
-
-    // allow override of WSession::m_nMessageColor
-    session()->SetMessageColor(ini->GetNumericValue(get_key_str(INI_STR_MSG_COLOR), session()->GetMessageColor()));
-
-    // get asv values
-    if (application()->HasConfigFlag(OP_FLAGS_SIMPLE_ASV)) {
-      INI_GET_ASV("SL", sl, StringToUnsignedChar, syscfg.autoval[9].sl);
-      INI_GET_ASV("DSL", dsl, StringToUnsignedChar, syscfg.autoval[9].dsl);
-      INI_GET_ASV("EXEMPT", exempt, StringToUnsignedChar, 0);
-      INI_GET_ASV("AR", ar, str_to_arword, syscfg.autoval[9].ar);
-      INI_GET_ASV("DAR", dar, str_to_arword, syscfg.autoval[9].dar);
-      INI_GET_ASV("RESTRICT", restrict, str2restrict, 0);
-    }
-    if (application()->HasConfigFlag(OP_FLAGS_ADV_ASV)) {
-      session()->advasv.reg_wwiv = ini->GetNumericValue<uint8_t>(get_key_str(INI_STR_ADVANCED_ASV, "REG_WWIV"), 1);
-      session()->advasv.nonreg_wwiv = ini->GetNumericValue<uint8_t>(get_key_str(INI_STR_ADVANCED_ASV, "NONREG_WWIV"), 1);
-      session()->advasv.non_wwiv = ini->GetNumericValue<uint8_t>(get_key_str(INI_STR_ADVANCED_ASV, "NON_WWIV"), 1);
-      session()->advasv.cosysop = ini->GetNumericValue<uint8_t>(get_key_str(INI_STR_ADVANCED_ASV, "COSYSOP"), 1);
-    }
-
-    // get callback values
-    if (application()->HasConfigFlag(OP_FLAGS_CALLBACK)) {
-      INI_GET_CALLBACK("SL", sl, StringToUnsignedChar, syscfg.autoval[2].sl);
-      INI_GET_CALLBACK("DSL", dsl, StringToUnsignedChar, syscfg.autoval[2].dsl);
-      INI_GET_CALLBACK("EXEMPT", exempt, StringToUnsignedChar, 0);
-      INI_GET_CALLBACK("AR", ar, str_to_arword, syscfg.autoval[2].ar);
-      INI_GET_CALLBACK("DAR", dar, str_to_arword, syscfg.autoval[2].dar);
-      INI_GET_CALLBACK("RESTRICT", restrict, str2restrict, 0);
-      INI_GET_CALLBACK("FORCED", forced, stryn2tf, 0);
-      INI_GET_CALLBACK("LONG_DISTANCE", longdistance, stryn2tf, 0);
-      INI_GET_CALLBACK("REPEAT", repeat, StringToUnsignedChar, 0);
-    }
-
-    // sysconfig flags
-    syscfg.sysconfig = static_cast<unsigned short>(GetFlagsFromIniFile(ini, sysconfig_flags,
-                       NEL(sysconfig_flags), syscfg.sysconfig));
-
-    const char* ss;
-    // misc stuff
-    if (((ss = ini->GetValue(get_key_str(INI_STR_MAIL_WHO_LEN))) != nullptr) &&
-        (atoi(ss) > 0 || ss[0] == '0')) {
-      session()->mail_who_field_len = StringToUnsignedShort(ss);
-    }
-    if ((ss = ini->GetValue(get_key_str(INI_STR_RATIO))) != nullptr) {
-      syscfg.req_ratio = static_cast<float>(atof(ss));
-    }
-
-    if ((ss = ini->GetValue(get_key_str(INI_STR_ATTACH_DIR))) != nullptr) {
-      m_attachmentDirectory = ss;
-      if (m_attachmentDirectory.at(m_attachmentDirectory.length() - 1) != File::pathSeparatorChar) {
-        m_attachmentDirectory += File::pathSeparatorString;
-      }
-    } else {
-      std::ostringstream os;
-      os << GetHomeDir() << ATTACH_DIR << File::pathSeparatorString;
-      m_attachmentDirectory = os.str();
-    }
-
-    session()->screen_saver_time = ini->GetNumericValue(get_key_str(INI_STR_SCREEN_SAVER_TIME),
-                                      session()->screen_saver_time);
-  }
-
-  session()->max_extend_lines    = std::min<unsigned short>(session()->max_extend_lines, 99);
-  session()->max_batch           = std::min<unsigned short>(session()->max_batch , 999);
-  session()->max_chains          = std::min<unsigned short>(session()->max_chains, 999);
-  session()->max_gfilesec        = std::min<unsigned short>(session()->max_gfilesec, 999);
-
-  // can't allow user to change these on-the-fly
-  unsigned short omb = session()->max_batch;
-  if (omb) {
-    session()->max_batch = omb;
-  }
-  unsigned short omc = session()->max_chains;
-  if (omc) {
-    session()->max_chains = omc;
-  }
-  unsigned short omg = session()->max_gfilesec;
-  if (omg) {
-    session()->max_gfilesec = omg;
-  }
-
-  session()->set_wwivmail_enabled(ini->GetBooleanValue("USE_WWIVMAIL", true));
-  session()->set_internal_qwk_enabled(ini->GetBooleanValue("USE_INTERNAL_QWK", true));
-  return ini;
 }
 
-bool WApplication::ReadConfigOverlayFile(int instance_number, IniFile* ini) {
-  const char* temp_directory_char = ini->GetValue("TEMP_DIRECTORY");
-  if (temp_directory_char == nullptr) {
-    std::clog << "TEMP_DIRECTORY must be set in WWIV.INI." << std::endl;
+#define INI_GET_ASV(s, f, func, d)                                                                 \
+  {                                                                                                \
+    const auto ss = ini.value<std::string>(to_array_key(INI_STR_SIMPLE_ASV, s));                    \
+    if (!ss.empty()) {                                                                             \
+      f = func(ss);                                                                            \
+    } else {                                                                                       \
+      f = d;                                                                                   \
+    }                                                                                              \
+  }
+
+static std::vector<ini_flags_type> sysinfo_flags = {
+    {INI_STR_FORCE_FBACK, OP_FLAGS_FORCE_NEWUSER_FEEDBACK},
+    {INI_STR_CHECK_DUP_PHONES, OP_FLAGS_CHECK_DUPE_PHONENUM},
+    {INI_STR_HANGUP_DUP_PHONES, OP_FLAGS_HANGUP_DUPE_PHONENUM},
+    {INI_STR_USE_SIMPLE_ASV, OP_FLAGS_SIMPLE_ASV},
+    {INI_STR_POSTTIME_COMPENS, OP_FLAGS_POSTTIME_COMPENSATE},
+    {INI_STR_SHOW_HIER, OP_FLAGS_SHOW_HIER},
+    {INI_STR_IDZ_DESC, OP_FLAGS_IDZ_DESC},
+    {INI_STR_SETLDATE, OP_FLAGS_SETLDATE},
+    {INI_STR_READ_CD_IDZ, OP_FLAGS_READ_CD_IDZ},
+    {INI_STR_FSED_EXT_DESC, OP_FLAGS_FSED_EXT_DESC},
+    {INI_STR_FAST_TAG_RELIST, OP_FLAGS_FAST_TAG_RELIST},
+    {INI_STR_MAIL_PROMPT, OP_FLAGS_MAIL_PROMPT},
+    {INI_STR_SHOW_CITY_ST, OP_FLAGS_SHOW_CITY_ST},
+    {INI_STR_FAST_SEARCH, OP_FLAGS_FAST_SEARCH},
+    {INI_STR_NET_CALLOUT, OP_FLAGS_NET_CALLOUT},
+    {INI_STR_WFC_SCREEN, OP_FLAGS_WFC_SCREEN},
+    {INI_STR_MSG_TAG, OP_FLAGS_MSG_TAG},
+    {INI_STR_CHAIN_REG, OP_FLAGS_CHAIN_REG},
+    {INI_STR_CAN_SAVE_SSM, OP_FLAGS_CAN_SAVE_SSM},
+    {INI_STR_EXTRA_COLOR, OP_FLAGS_EXTRA_COLOR},
+    {INI_STR_USE_FORCE_SCAN, OP_FLAGS_USE_FORCESCAN},
+    {INI_STR_NEWUSER_MIN, OP_FLAGS_NEWUSER_MIN},
+};
+
+static std::vector<ini_flags_type> sysconfig_flags = {
+    {INI_STR_2WAY_CHAT, sysconfig_2_way},
+    {INI_STR_NO_NEWUSER_FEEDBACK, sysconfig_no_newuser_feedback},
+    {INI_STR_TITLEBAR, sysconfig_titlebar},
+    {INI_STR_LOG_DOWNLOADS, sysconfig_log_dl},
+    {INI_STR_CLOSE_XFER, sysconfig_no_xfer},
+    {INI_STR_ALL_UL_TO_SYSOP, sysconfig_all_sysop},
+    {INI_STR_ALLOW_ALIASES, sysconfig_allow_alias},
+    {INI_STR_EXTENDED_USERINFO, sysconfig_extended_info},
+    {INI_STR_FREE_PHONE, sysconfig_free_phone}
+};
+
+void Application::ReadINIFile(IniFile& ini) {
+  // Setup default  data
+  chatname_color_ = 95;
+  message_color_ = 2;
+  max_batch = 50;
+  max_extend_lines = 10;
+  max_chains = 50;
+  max_gfilesec = 32;
+  mail_who_field_len = 35;
+
+  // Found something, pull out event flags.
+  for (const auto& kv : eventinfo) {
+    spawn_opts_[kv.first] = kv.second;
+    const auto key_name = to_array_key(INI_STR_SPAWNOPT, kv.first);
+    const auto ss = ini.value<string>(key_name);
+    if (!ss.empty()) {
+      spawn_opts_[kv.first] = str2spawnopt(ss);
+    }
+  }
+
+  // pull out newuser colors
+  for (int i = 0; i < 10; i++) {
+    auto index = std::to_string(i);
+    auto num = ini.value<uint8_t>(to_array_key(INI_STR_NUCOLOR, index));
+    if (num != 0) {
+      newuser_colors[i] = num;
+    }
+    num = ini.value<uint8_t>(to_array_key(INI_STR_NUCOLORBW, index));
+    if (num != 0) {
+      newuser_bwcolors[i] = num;
+    }
+  }
+
+  SetCarbonCopyEnabled(ini.value<bool>("ALLOW_CC_BCC"));
+
+  // pull out sysop-side colors
+  localIO()->SetTopScreenColor(
+      ini.value<int>(INI_STR_TOPCOLOR, localIO()->GetTopScreenColor()));
+  localIO()->SetUserEditorColor(
+      ini.value<int>(INI_STR_F1COLOR, localIO()->GetUserEditorColor()));
+  localIO()->SetEditLineColor(
+      ini.value<int>(INI_STR_EDITLINECOLOR, localIO()->GetEditLineColor()));
+  chatname_color_ = ini.value<int>(INI_STR_CHATSELCOLOR, GetChatNameSelectionColor());
+
+  // pull out sizing options
+  max_batch = ini.value<uint16_t>(INI_STR_MAX_BATCH, max_batch);
+  max_extend_lines = ini.value<uint16_t>(INI_STR_MAX_EXTEND_LINES, max_extend_lines);
+  max_chains = ini.value<uint16_t>(INI_STR_MAX_CHAINS, max_chains);
+  max_gfilesec = ini.value<uint16_t>(INI_STR_MAX_GFILESEC, max_gfilesec);
+
+  // pull out strings
+  upload_cmd = ini.value<string>(INI_STR_UPLOAD_CMD);
+  beginday_cmd = ini.value<string>(INI_STR_BEGINDAY_CMD);
+  newuser_cmd = ini.value<string>(INI_STR_NEWUSER_CMD);
+  logon_cmd = ini.value<string>(INI_STR_LOGON_CMD);
+  terminal_command = ini.value<string>(INI_STR_TERMINAL_CMD);
+   
+  forced_read_subnum_ =
+      ini.value<uint16_t>(INI_STR_FORCE_SCAN_SUBNUM, forced_read_subnum_);
+  internal_zmodem_ = ini.value<bool>(INI_STR_INTERNALZMODEM, true);
+  newscan_at_login_ = ini.value<bool>(INI_STR_NEW_SCAN_AT_LOGIN, true);
+  exec_log_syncfoss_ = ini.value<bool>(INI_STR_EXEC_LOG_SYNCFOSS, false);
+  exec_child_process_wait_time_ = ini.value<int>(INI_STR_EXEC_CHILD_WAIT_TIME, 500);
+  beginday_node_number_ = ini.value<int>(INI_STR_BEGINDAYNODENUMBER, 1);
+
+  // pull out sysinfo_flags
+  flags_ = GetFlagsFromIniFile(ini, sysinfo_flags, flags_);
+
+  // allow override of Application::message_color_
+  message_color_ = ini.value<int>(INI_STR_MSG_COLOR, GetMessageColor());
+
+  // get asv values
+  if (HasConfigFlag(OP_FLAGS_SIMPLE_ASV)) {
+    INI_GET_ASV("SL", asv.sl, to_number<uint8_t>, asv.sl);
+    INI_GET_ASV("DSL", asv.dsl, to_number<uint8_t>, asv.dsl);
+    INI_GET_ASV("EXEMPT", asv.exempt, to_number<uint8_t>, asv.exempt);
+    INI_GET_ASV("AR", asv.ar, str_to_arword, asv.ar);
+    INI_GET_ASV("DAR", asv.dar, str_to_arword, asv.dar);
+    INI_GET_ASV("RESTRICT", asv.restrict, str2restrict, asv.restrict);
+  }
+
+  // sysconfig flags
+  config()->set_sysconfig(GetFlagsFromIniFile(ini, sysconfig_flags, config()->sysconfig_flags()));
+
+  // misc stuff
+  auto num = ini.value<uint16_t>(INI_STR_MAIL_WHO_LEN);
+  if (num > 0) {
+    mail_who_field_len = num;
+  }
+
+  const auto attach_dir = ini.value<string>(INI_STR_ATTACH_DIR);
+  attach_dir_ = (!attach_dir.empty()) ? attach_dir : FilePath(bbsdir(), ATTACH_DIR);
+  File::EnsureTrailingSlash(&attach_dir_);
+
+  screen_saver_time = ini.value<uint16_t>("SCREEN_SAVER_TIME", screen_saver_time);
+
+  max_extend_lines = std::min<uint16_t>(max_extend_lines, 99);
+  max_batch = std::min<uint16_t>(max_batch, 999);
+  max_chains = std::min<uint16_t>(max_chains, 999);
+  max_gfilesec = std::min<uint16_t>(max_gfilesec, 999);
+
+  full_screen_read_prompt_ = ini.value<bool>("FULL_SCREEN_READER", true);
+  bout.set_logon_key_timeout(seconds(std::max<int>(10, ini.value<int>("LOGON_KEY_TIMEOUT", 30))));
+  bout.set_default_key_timeout(seconds(std::max<int>(30, ini.value<int>("USER_KEY_TIMEOUT", 180))));
+  bout.set_sysop_key_timeout(seconds(std::max<int>(30, ini.value<int>("SYSOP_KEY_TIMEOUT", 600))));
+}
+
+bool Application::ReadInstanceSettings(int instance_number, IniFile& ini) {
+  auto temp_directory = ini.value<string>("TEMP_DIRECTORY");
+  if (temp_directory.empty()) {
+    LOG(ERROR) << "TEMP_DIRECTORY must be set in WWIV.INI.";
     return false;
   }
-  string temp_directory(temp_directory_char);
-  // TEMP_DIRECTORY is defined in wwiv.ini, also default the batch_directory to 
+
+  File::FixPathSeparators(&temp_directory);
+  // TEMP_DIRECTORY is defined in wwiv.ini, also default the batch_directory to
   // TEMP_DIRECTORY if BATCH_DIRECTORY does not exist.
-  string batch_directory(ini->GetValue("BATCH_DIRECTORY", temp_directory.c_str()));
+  string batch_directory(ini.value<string>("BATCH_DIRECTORY", temp_directory));
+  File::FixPathSeparators(&batch_directory);
 
   // Replace %n with instance number value.
-  string instance_num_string = std::to_string(instance_number);
+  auto instance_num_string = std::to_string(instance_number);
   StringReplace(&temp_directory, "%n", instance_num_string);
   StringReplace(&batch_directory, "%n", instance_num_string);
 
-  const string base_dir = GetHomeDir();
-  File::MakeAbsolutePath(base_dir, &batch_directory);
-  File::MakeAbsolutePath(base_dir, &temp_directory);
-  File::EnsureTrailingSlash(&temp_directory);
-  File::EnsureTrailingSlash(&batch_directory);
+  const auto base_dir = bbsdir();
+  temp_directory_ = File::EnsureTrailingSlash(File::absolute(base_dir, temp_directory));
+  batch_directory_ = File::EnsureTrailingSlash(File::absolute(base_dir, batch_directory));
 
-  syscfgovr.primaryport = 1;
-  strcpy(syscfgovr.tempdir, temp_directory.c_str());
-  strcpy(syscfgovr.batchdir, batch_directory.c_str());
-
-  int max_num_instances = ini->GetNumericValue("NUM_INSTANCES", 4);
+  const auto max_num_instances = ini.value<int>("NUM_INSTANCES", 4);
   if (instance_number > max_num_instances) {
-    std::clog << "Not enough instances configured (" << max_num_instances << ")." << std::endl;
+    LOG(ERROR) << "Not enough instances configured (" << max_num_instances << ").";
     return false;
   }
   return true;
 }
 
-static char* DuplicatePath(const char* path) {
-  char* out = new char[MAX_PATH + 1];
-  strncpy(out, path, MAX_PATH);
-  return out;
-}
+bool Application::ReadConfig() {
+  config_.reset(new Config(bbsdir()));
+  if (!config_->IsInitialized()) {
+    LOG(ERROR) << CONFIG_DAT << " NOT FOUND.";
+    return false;
+  }
 
-bool WApplication::ReadConfig() {
-  wwiv::sdk::Config full_config;
-  if (!full_config.IsInitialized()) {
-    std::clog << CONFIG_DAT << " NOT FOUND." << std::endl;
+  if (!config_->versioned_config_dat()) {
+    std::cerr << "Please run wwivconfig to upgrade " << CONFIG_DAT
+              << " to the most recent version.\r\n";
+    LOG(ERROR) << "Please run wwivconfig to upgrade " << CONFIG_DAT
+               << " to the most recent version.";
+    wwiv::os::sleep_for(seconds(2));
     return false;
   }
 
   // initialize the user manager
-  users()->InitializeUserManager(full_config.config()->datadir, full_config.config()->userreclen, full_config.config()->maxusers);
+  user_manager_.reset(new UserManager(*config_));
+  statusMgr.reset(new StatusMgr(config_->datadir(), StatusManagerCallback));
 
-  std::unique_ptr<IniFile> ini(ReadINIFile());
-  if (!ini->IsOpen()) {
-    std::clog << "Insufficient memory for system info structure." << std::endl;
+  IniFile ini(FilePath(bbsdir(), WWIV_INI), {StrCat("WWIV-", instance_number()), INI_TAG});
+  if (!ini.IsOpen()) {
+    LOG(ERROR) << "Unable to read WWIV.INI.";
     AbortBBS();
   }
-
-  bool config_ovr_read = ReadConfigOverlayFile(GetInstanceNumber(),ini.get());
+  ReadINIFile(ini);
+  auto config_ovr_read = ReadInstanceSettings(instance_number(), ini);
   if (!config_ovr_read) {
     return false;
   }
 
-  // update user info data
-  int16_t userreclen = static_cast<int16_t>(sizeof(userrec));
-  int16_t waitingoffset = OFFOF(waiting);
-  int16_t inactoffset = OFFOF(inact);
-  int16_t sysstatusoffset = OFFOF(sysstatus);
-  int16_t fuoffset = OFFOF(forwardusr);
-  int16_t fsoffset = OFFOF(forwardsys);
-  int16_t fnoffset = OFFOF(net_num);
-
-  if (userreclen != full_config.config()->userreclen           ||
-      waitingoffset != full_config.config()->waitingoffset     ||
-      inactoffset != full_config.config()->inactoffset         ||
-      sysstatusoffset != full_config.config()->sysstatusoffset ||
-      fuoffset != full_config.config()->fuoffset               ||
-      fsoffset != full_config.config()->fsoffset               ||
-      fnoffset != full_config.config()->fnoffset) {
-    full_config.config()->userreclen      = userreclen;
-    full_config.config()->waitingoffset   = waitingoffset;
-    full_config.config()->inactoffset     = inactoffset;
-    full_config.config()->sysstatusoffset = sysstatusoffset;
-    full_config.config()->fuoffset        = fuoffset;
-    full_config.config()->fsoffset        = fsoffset;
-    full_config.config()->fnoffset        = fnoffset;
-  }
-
-  syscfg.newuserpw        = strdup(full_config.config()->newuserpw);
-  syscfg.systempw         = strdup(full_config.config()->systempw);
-
-  syscfg.msgsdir          = DuplicatePath(full_config.config()->msgsdir);
-  syscfg.gfilesdir        = DuplicatePath(full_config.config()->gfilesdir);
-  syscfg.datadir          = DuplicatePath(full_config.config()->datadir);
-  syscfg.dloadsdir        = DuplicatePath(full_config.config()->dloadsdir);
-  syscfg.menudir          = DuplicatePath(full_config.config()->menudir);
-
-  syscfg.systemname       = strdup(full_config.config()->systemname);
-  syscfg.systemphone      = strdup(full_config.config()->systemphone);
-  syscfg.sysopname        = strdup(full_config.config()->sysopname);
-
-  syscfg.newusersl        = full_config.config()->newusersl;
-  syscfg.newuserdsl       = full_config.config()->newuserdsl;
-  syscfg.maxwaiting       = full_config.config()->maxwaiting;
-  syscfg.newuploads       = full_config.config()->newuploads;
-  syscfg.closedsystem     = full_config.config()->closedsystem;
-
-  syscfg.systemnumber     = full_config.config()->systemnumber;
-  syscfg.maxusers         = full_config.config()->maxusers;
-  syscfg.newuser_restrict = full_config.config()->newuser_restrict;
-  syscfg.sysconfig        = full_config.config()->sysconfig;
-  syscfg.sysoplowtime     = full_config.config()->sysoplowtime;
-  syscfg.sysophightime    = full_config.config()->sysophightime;
-  syscfg.executetime      = full_config.config()->executetime;
-  syscfg.netlowtime       = full_config.config()->netlowtime;
-  syscfg.nethightime      = full_config.config()->nethightime;
-  syscfg.max_subs         = full_config.config()->max_subs;
-  syscfg.max_dirs         = full_config.config()->max_dirs;
-  syscfg.qscn_len         = full_config.config()->qscn_len;
-  syscfg.userreclen       = full_config.config()->userreclen;
-
-  syscfg.post_call_ratio  = full_config.config()->post_call_ratio;
-  syscfg.req_ratio        = full_config.config()->req_ratio;
-  syscfg.newusergold      = full_config.config()->newusergold;
-
-  syscfg.autoval[0]       = full_config.config()->autoval[0];
-  syscfg.autoval[1]       = full_config.config()->autoval[1];
-  syscfg.autoval[2]       = full_config.config()->autoval[2];
-  syscfg.autoval[3]       = full_config.config()->autoval[3];
-  syscfg.autoval[4]       = full_config.config()->autoval[4];
-  syscfg.autoval[5]       = full_config.config()->autoval[5];
-  syscfg.autoval[6]       = full_config.config()->autoval[6];
-  syscfg.autoval[7]       = full_config.config()->autoval[7];
-  syscfg.autoval[8]       = full_config.config()->autoval[8];
-  syscfg.autoval[9]       = full_config.config()->autoval[9];
-
-  syscfg.wwiv_reg_number  = full_config.config()->wwiv_reg_number;
-
-  make_abs_path(syscfg.gfilesdir);
-  make_abs_path(syscfg.datadir);
-  make_abs_path(syscfg.msgsdir);
-  make_abs_path(syscfg.dloadsdir);
-  make_abs_path(syscfg.menudir);
-
-  make_abs_path(syscfgovr.tempdir);
-  make_abs_path(syscfgovr.batchdir);
+  temp_directory_ = File::absolute(bbsdir(), temp_directory());
+  batch_directory_ = File::absolute(bbsdir(), batch_directory());
 
   return true;
 }
 
-bool WApplication::SaveConfig() {
-  File configFile(CONFIG_DAT);
-  if (configFile.Open(File::modeBinary | File::modeReadWrite)) {
-    configrec full_syscfg;
-    configFile.Read(&full_syscfg, sizeof(configrec));
-    // These are set by WWIV.INI, set them back so that changes
-    // will be propagated to config.dat
-    full_syscfg.sysconfig       = syscfg.sysconfig;
-    full_syscfg.qscn_len        = syscfg.qscn_len;
-    full_syscfg.userreclen      = syscfg.userreclen;
-
-    full_syscfg.req_ratio       = syscfg.req_ratio;
-
-    full_syscfg.autoval[0]      = syscfg.autoval[0];
-    full_syscfg.autoval[1]      = syscfg.autoval[1];
-    full_syscfg.autoval[2]      = syscfg.autoval[2];
-    full_syscfg.autoval[3]      = syscfg.autoval[3];
-    full_syscfg.autoval[4]      = syscfg.autoval[4];
-    full_syscfg.autoval[5]      = syscfg.autoval[5];
-    full_syscfg.autoval[6]      = syscfg.autoval[6];
-    full_syscfg.autoval[7]      = syscfg.autoval[7];
-    full_syscfg.autoval[8]      = syscfg.autoval[8];
-    full_syscfg.autoval[9]      = syscfg.autoval[9];
-
-    for (int nTempArcNum = 0; nTempArcNum < 4; nTempArcNum++) {
-      strcpy(full_syscfg.arcs[ nTempArcNum ].extension, arcs[ nTempArcNum ].extension);
-      strcpy(full_syscfg.arcs[ nTempArcNum ].arca, arcs[ nTempArcNum ].arca);
-      strcpy(full_syscfg.arcs[ nTempArcNum ].arce, arcs[ nTempArcNum ].arce);
-      strcpy(full_syscfg.arcs[ nTempArcNum ].arcl, arcs[ nTempArcNum ].arcl);
-    }
-
-    full_syscfg.unused_rrd = 0;
-    memset(full_syscfg.unused_regcode, '\0', 83);
-
-    configFile.Seek(0, File::seekBegin);
-    configFile.Write(&full_syscfg, sizeof(configrec));
-    return false;
+void Application::read_nextern() {
+  externs.clear();
+  DataFile<newexternalrec> externalFile(FilePath(config()->datadir(), NEXTERN_DAT));
+  if (externalFile) {
+    externalFile.ReadVector(externs, 15);
   }
+}
+
+void Application::read_arcs() {
+  arcs.clear();
+  DataFile<arcrec> file(FilePath(config()->datadir(), ARCHIVER_DAT));
+  if (file) {
+    file.ReadVector(arcs, MAX_ARCS);
+  }
+}
+
+void Application::read_editors() {
+  editors.clear();
+  DataFile<editorrec> file(FilePath(config()->datadir(), EDITORS_DAT));
+  if (!file) {
+    return;
+  }
+  file.ReadVector(editors, 10);
+}
+
+void Application::read_nintern() {
+  over_intern.clear();
+  DataFile<newexternalrec> file(FilePath(config()->datadir(), NINTERN_DAT));
+  if (file) {
+    file.ReadVector(over_intern, 3);
+  }
+}
+
+bool Application::read_subs() {
+  subs_.reset(new wwiv::sdk::Subs(config_->datadir(), net_networks));
+  return subs_->Load();
+}
+
+class BBSLastReadImpl : public wwiv::sdk::msgapi::WWIVLastReadImpl {
+  uint32_t last_read(int area) const { return a()->context().qsc_p[area]; }
+
+  void set_last_read(int area, uint32_t last_read) {
+    if (area >= 0) {
+      a()->context().qsc_p[area] = last_read;
+    }
+  }
+
+  void Load() {
+    // Handled by the BBS in read_qscn(usernum, qsc, false);
+  }
+
+  void Save() {
+    // Handled by the BBS in write_qscn(usernum, qsc, false);
+  }
+};
+
+bool Application::create_message_api() {
+  // TODO(rushfan): Create the right API type for the right message area.
+
+  wwiv::sdk::msgapi::MessageApiOptions options;
+  // Delete ONE matches classic WWIV behavior.
+  options.overflow_strategy = wwiv::sdk::msgapi::OverflowStrategy::delete_one;
+
+  // We only support type-2
+  msgapis_[2] = std::make_unique<wwiv::sdk::msgapi::WWIVMessageApi>(
+      options, *config_.get(), net_networks, new BBSLastReadImpl());
+
   return true;
 }
 
-void WApplication::read_nextern() {
-  session()->SetNumberOfExternalProtocols(0);
-  if (externs) {
-    free(externs);
-    externs = nullptr;
+void Application::SetLogonTime() { system_logon_time_ = std::chrono::system_clock::now(); }
+
+std::chrono::seconds Application::duration_used_this_session() const {
+  return duration_cast<seconds>(std::chrono::system_clock::now() - system_logon_time_);
+}
+
+std::chrono::seconds Application::extratimecall() const {
+  return duration_cast<seconds>(extratimecall_);
+}
+
+std::chrono::seconds Application::set_extratimecall(std::chrono::duration<double> et) {
+  extratimecall_ = et;
+  return duration_cast<seconds>(extratimecall_);
+}
+
+std::chrono::seconds Application::add_extratimecall(std::chrono::duration<double> et) {
+  extratimecall_ += et;
+  return duration_cast<seconds>(extratimecall_);
+}
+
+std::chrono::seconds Application::subtract_extratimecall(std::chrono::duration<double> et) {
+  extratimecall_ -= et;
+  return duration_cast<seconds>(extratimecall_);
+}
+
+void Application::read_networks() {
+  internetEmailName = "";
+  internetEmailDomain = "";
+  internetPopDomain = "";
+  SetInternetUseRealNames(false);
+
+  // TODO(rushfan): Remove these and put them somewhere else.
+  // Like on a per-network config when we add proper internet
+  // support.
+  IniFile ini("net.ini", {"NETWORK"});
+  if (ini.IsOpen()) {
+    // Note FWDNAME isn't listed here.
+    internetEmailName = ini.value<string>("POPNAME");
+    // Note FWDDOM isn't listed here.
+    internetEmailDomain = ini.value<string>("DOMAIN");
+    internetPopDomain = ini.value<string>("POPDOMAIN");
+    SetInternetUseRealNames(ini.value<bool>("REALNAME"));
   }
 
-  File externalFile(syscfg.datadir, NEXTERN_DAT);
-  if (externalFile.Open(File::modeBinary | File::modeReadOnly)) {
-    unsigned long lFileSize = externalFile.GetLength();
-    if (lFileSize > 15 * sizeof(newexternalrec)) {
-      lFileSize = 15 * sizeof(newexternalrec);
-    }
-    externs = static_cast<newexternalrec *>(BbsAllocA(lFileSize + 10));
-    WWIV_ASSERT(externs != nullptr);
-    session()->SetNumberOfExternalProtocols(externalFile.Read(externs, lFileSize) / sizeof(newexternalrec));
+  wwiv::sdk::Networks networks(*config());
+  if (networks.IsInitialized()) {
+    net_networks = networks.networks();
+  }
+
+  // Add a default entry for us.
+  if (net_networks.empty()) {
+    net_networks_rec n{};
+    strcpy(n.name, "Sample Network");
+    n.dir = config()->datadir();
+    n.sysnum = 1;
   }
 }
 
-void WApplication::read_arcs() {
-  if (arcs) {
-    free(arcs);
-    arcs = nullptr;
-  }
-
-  File archiverFile(syscfg.datadir, ARCHIVER_DAT);
-  if (archiverFile.Open(File::modeBinary | File::modeReadOnly)) {
-    unsigned long lFileSize = archiverFile.GetLength();
-    if (lFileSize > MAX_ARCS * sizeof(arcrec)) {
-      lFileSize = MAX_ARCS * sizeof(arcrec);
-    }
-    arcs = static_cast<arcrec *>(BbsAllocA(lFileSize));
-    archiverFile.Read(arcs, lFileSize);
-    WWIV_ASSERT(arcs != nullptr);
-  }
-}
-
-void WApplication::read_editors() {
-  if (editors) {
-    free(editors);
-    editors = nullptr;
-  }
-  session()->SetNumberOfEditors(0);
-
-  File file(syscfg.datadir, EDITORS_DAT);
-  if (file.Open(File::modeBinary | File::modeReadOnly)) {
-    unsigned long lFileSize = file.GetLength();
-    if (lFileSize > 10 * sizeof(editorrec)) {
-      lFileSize = 10 * sizeof(editorrec);
-    }
-    editors = static_cast<editorrec *>(BbsAllocA(lFileSize + 10));
-    WWIV_ASSERT(editors != nullptr);
-    session()->SetNumberOfEditors(file.Read(editors, lFileSize) / sizeof(editorrec));
-  }
-}
-
-void WApplication::read_nintern() {
-  if (over_intern) {
-    free(over_intern);
-    over_intern = nullptr;
-  }
-  File file(syscfg.datadir, NINTERN_DAT);
-  if (file.Open(File::modeBinary | File::modeReadOnly)) {
-    over_intern = static_cast<newexternalrec *>(BbsAllocA(3 * sizeof(newexternalrec)));
-    WWIV_ASSERT(over_intern != nullptr);
-
-    file.Read(over_intern, 3 * sizeof(newexternalrec));
-  }
-}
-
-bool WApplication::read_subs() {
-  if (subboards) {
-    free(subboards);
-  }
-  subboards = nullptr;
-  session()->SetMaxNumberMessageAreas(syscfg.max_subs);
-  subboards = static_cast< subboardrec * >(BbsAllocA(session()->GetMaxNumberMessageAreas() * sizeof(subboardrec)));
-  WWIV_ASSERT(subboards != nullptr);
-
-  File file(syscfg.datadir, SUBS_DAT);
-  if (!file.Open(File::modeBinary | File::modeReadOnly)) {
-    std::clog << file.GetName() << " NOT FOUND." << std::endl;
-    return false;
-  }
-  session()->num_subs = (file.Read(subboards,
-                                      (session()->GetMaxNumberMessageAreas() * sizeof(subboardrec)))) / sizeof(subboardrec);
-  return (read_subs_xtr(session()->GetMaxNumberMessageAreas(), session()->num_subs, subboards));
-}
-
-void WApplication::read_networks() {
-  session()->internetEmailName = "";
-  session()->internetEmailDomain = "";
-  session()->internetPopDomain = "";
-  session()->SetInternetUseRealNames(false);
-
-  // TODO: wire up for NetX
-  TextFile fileNetIni("NET.INI", "rt");
-  if (fileNetIni.IsOpen()) {
-    while (!fileNetIni.IsEndOfFile()) {
-      char szBuffer[255];
-      fileNetIni.ReadLine(szBuffer, 80);
-      szBuffer[sizeof(szBuffer) - 1] = 0;
-      StringRemoveWhitespace(szBuffer);
-      if (!strncasecmp(szBuffer, "DOMAIN=", 7) && session()->internetEmailDomain.empty()) {
-        session()->internetEmailDomain = &(szBuffer[7]);
-      } else if (!strncasecmp(szBuffer, "POPNAME=", 8) && session()->internetEmailName.empty()) {
-        session()->internetEmailName = &(szBuffer[8]);
-      } else if (!strncasecmp(szBuffer, "FWDDOM=", 7)) {
-        session()->internetEmailDomain = &(szBuffer[7]);
-      } else if (!strncasecmp(szBuffer, "FWDNAME=", 8)) {
-        session()->internetEmailName = &(szBuffer[8]);
-      } else if (!strncasecmp(szBuffer, "POPDOMAIN=", 10)) {
-        session()->internetPopDomain = &(szBuffer[10]);
-      } else if (!strncasecmp(szBuffer, "REALNAME=", 9) &&
-                 (szBuffer[9] == 'Y' || szBuffer[9] == 'y')) {
-        session()->SetInternetUseRealNames(true);
-      }
-    }
-    fileNetIni.Close();
-  }
-  if (net_networks) {
-    free(net_networks);
-  }
-  net_networks = nullptr;
-
-  File networksfile(syscfg.datadir, NETWORKS_DAT);
-  if (networksfile.Open(File::modeBinary | File::modeReadOnly)) {
-    int net_num_max = networksfile.GetLength() / sizeof(net_networks_rec_disk);
-    session()->SetMaxNetworkNumber(net_num_max);
-    std::unique_ptr<net_networks_rec_disk[]> net_networks_disk(new net_networks_rec_disk[net_num_max]());
-    net_networks = static_cast<net_networks_rec *>(BbsAllocA(net_num_max * sizeof(net_networks_rec)));
-    if (net_num_max) {
-      networksfile.Read(net_networks_disk.get(), net_num_max * sizeof(net_networks_rec_disk));
-      for (int i = 0; i < net_num_max; i++) {
-        net_networks[i].type = net_networks_disk[i].type;
-        strcpy(net_networks[i].name, net_networks_disk[i].name);
-        strcpy(net_networks[i].dir, net_networks_disk[i].dir);
-        net_networks[i].sysnum = net_networks_disk[i].sysnum;
-      }
-    }
-    networksfile.Close();
-    for (int nTempNetNumber = 0; nTempNetNumber < session()->GetMaxNetworkNumber(); nTempNetNumber++) {
-      char* ss = strchr(net_networks[nTempNetNumber].name, ' ');
-      if (ss) {
-        *ss = '\0';
-      }
-    }
-  }
-
-  if (!net_networks) {
-    net_networks = static_cast<net_networks_rec *>(BbsAllocA(sizeof(net_networks_rec)));
-    WWIV_ASSERT(net_networks != nullptr);
-    session()->SetMaxNetworkNumber(1);
-    strcpy(net_networks->name, "WWIVnet");
-    strcpy(net_networks->dir, syscfg.datadir);
-    net_networks->sysnum = syscfg.systemnumber;
-  }
-}
-
-bool WApplication::read_names() {
-  if (smallist) {
-    free(smallist);
-  }
-
-  int maxNumberOfUsers = std::max<int>(statusMgr->GetUserCount(), syscfg.maxusers);
-
-  smallist = static_cast<smalrec *>(BbsAllocA(static_cast<long>(maxNumberOfUsers) * static_cast<long>(sizeof(smalrec))));
-  WWIV_ASSERT(smallist != nullptr);
-
-  File file(syscfg.datadir, NAMES_LST);
-  if (!file.Open(File::modeBinary | File::modeReadOnly)) {
-    std::clog << file.GetName() << " NOT FOUND." << std::endl;
-    return false;
-  }
-  file.Read(smallist, maxNumberOfUsers * sizeof(smalrec));
-  file.Close();
+bool Application::read_names() {
+  // Load the SDK Names class too.
+  names_.reset(new Names(*config_.get()));
   return true;
 }
 
-void WApplication::read_voting() {
-  for (int nTempQuestionNumber = 0; nTempQuestionNumber < 20; nTempQuestionNumber++) {
-    questused[ nTempQuestionNumber ] = 0;
-  }
-
-  File file(syscfg.datadir, VOTING_DAT);
-  if (file.Open(File::modeBinary | File::modeReadOnly)) {
-    int n = static_cast<int>(file.GetLength() / sizeof(votingrec)) - 1;
-    for (int nTempQuestUsedNum = 0; nTempQuestUsedNum < n; nTempQuestUsedNum++) {
-      votingrec v;
-      file.Seek(static_cast<long>(nTempQuestUsedNum) * sizeof(votingrec), File::seekBegin);
-      file.Read(&v, sizeof(votingrec));
-      if (v.numanswers) {
-        questused[ nTempQuestUsedNum ] = 1;
-      }
-    }
-  }
-}
-
-bool WApplication::read_dirs() {
-  if (directories) {
-    free(directories);
-  }
-  directories = nullptr;
-  session()->SetMaxNumberFileAreas(syscfg.max_dirs);
-  directories = static_cast<directoryrec *>(BbsAllocA(static_cast<long>(session()->GetMaxNumberFileAreas()) *
-                static_cast<long>(sizeof(directoryrec))));
-  WWIV_ASSERT(directories != nullptr);
-
-  File file(syscfg.datadir, DIRS_DAT);
-  if (!file.Open(File::modeBinary | File::modeReadOnly)) {
-    std::clog << file.GetName() << " NOT FOUND." << std::endl;
+bool Application::read_dirs() {
+  directories.clear();
+  DataFile<directoryrec> file(FilePath(config()->datadir(), DIRS_DAT));
+  if (!file) {
+    LOG(ERROR) << file.file().GetName() << " NOT FOUND.";
     return false;
   }
-  session()->num_dirs = file.Read(directories,
-                                     (sizeof(directoryrec) * session()->GetMaxNumberFileAreas())) / sizeof(directoryrec);
+  file.ReadVector(directories, config()->max_dirs());
   return true;
 }
 
-void WApplication::read_chains() {
-  if (chains) {
-    free(chains);
+void Application::read_chains() {
+  chains.clear();
+  DataFile<chainfilerec> file(FilePath(config()->datadir(), CHAINS_DAT));
+  if (!file) {
+    return;
   }
-  chains = nullptr;
-  chains = static_cast<chainfilerec *>(BbsAllocA(session()->max_chains * sizeof(chainfilerec)));
-  WWIV_ASSERT(chains != nullptr);
-  File file(syscfg.datadir, CHAINS_DAT);
-  if (file.Open(File::modeBinary | File::modeReadOnly)) {
-    session()->SetNumberOfChains(file.Read(chains,
-                                    session()->max_chains * sizeof(chainfilerec)) / sizeof(chainfilerec));
-  }
-  file.Close();
-  if (application()->HasConfigFlag(OP_FLAGS_CHAIN_REG)) {
-    if (chains_reg) {
-      free(chains_reg);
-    }
-    chains_reg = nullptr;
-    chains_reg = static_cast<chainregrec *>(BbsAllocA(session()->max_chains * sizeof(chainregrec)));
-    WWIV_ASSERT(chains_reg != nullptr);
+  file.ReadVector(chains, max_chains);
 
-    File regFile(syscfg.datadir, CHAINS_REG);
-    if (regFile.Open(File::modeBinary | File::modeReadOnly)) {
-      regFile.Read(chains_reg, session()->max_chains * sizeof(chainregrec));
+  if (HasConfigFlag(OP_FLAGS_CHAIN_REG)) {
+    chains_reg.clear();
+
+    DataFile<chainregrec> regFile(FilePath(config()->datadir(), CHAINS_REG));
+    if (regFile) {
+      regFile.ReadVector(chains_reg, max_chains);
     } else {
-      for (int nTempChainNum = 0; nTempChainNum < session()->GetNumberOfChains(); nTempChainNum++) {
-        for (size_t nTempRegByNum = 0;
-             nTempRegByNum < sizeof(chains_reg[ nTempChainNum ].regby) / sizeof(chains_reg[ nTempChainNum ].regby[0]);
-             nTempRegByNum++) {
-          chains_reg[ nTempChainNum ].regby[ nTempRegByNum ] = 0;
-        }
-        chains_reg[ nTempChainNum ].usage   = 0;
-        chains_reg[ nTempChainNum ].minage  = 0;
-        chains_reg[ nTempChainNum ].maxage  = 255;
+      regFile.Close();
+      for (size_t nTempChainNum = 0; nTempChainNum < chains.size(); nTempChainNum++) {
+        chainregrec reg;
+        memset(&reg, 0, sizeof(chainregrec));
+        reg.maxage = 255;
+        chains_reg.push_back(reg);
       }
-      regFile.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile);
-      regFile.Write(chains_reg , sizeof(chainregrec) * session()->GetNumberOfChains());
+      DataFile<chainregrec> writeFile(FilePath(config()->datadir(), CHAINS_REG),
+                                      File::modeReadWrite | File::modeBinary |
+                                          File::modeCreateFile);
+      writeFile.WriteVector(chains_reg);
     }
-    regFile.Close();
   }
 }
 
-bool WApplication::read_language() {
-  if (languages) {
-    free(languages);
-  }
-  languages = nullptr;
-  File file(syscfg.datadir, LANGUAGE_DAT);
-  if (file.Open(File::modeBinary | File::modeReadOnly)) {
-    session()->num_languages = file.GetLength() / sizeof(languagerec);
-    if (session()->num_languages) {
-      languages = static_cast<languagerec *>(BbsAllocA(session()->num_languages * sizeof(languagerec)));
-      WWIV_ASSERT(languages != nullptr);
-
-      file.Read(languages, session()->num_languages * sizeof(languagerec));
+bool Application::read_language() {
+  {
+    DataFile<languagerec> file(FilePath(config()->datadir(), LANGUAGE_DAT));
+    if (file) {
+      file.ReadVector(languages);
     }
-    file.Close();
   }
-  if (!session()->num_languages) {
-    languages = static_cast<languagerec *>(BbsAllocA(sizeof(languagerec)));
-    WWIV_ASSERT(languages != nullptr);
-    session()->num_languages = 1;
-    strcpy(languages->name, "English");
-    strncpy(languages->dir, syscfg.gfilesdir, sizeof(languages->dir) - 1);
-    strncpy(languages->mdir, syscfg.menudir, sizeof(languages->mdir) - 1);
+  if (languages.empty()) {
+    // Add a default language to the list.
+    languagerec lang{};
+    to_char_array(lang.name, "English");
+    to_char_array(lang.dir, config()->gfilesdir());
+    to_char_array(lang.mdir, config()->menudir());
+
+    languages.emplace_back(lang);
   }
-  session()->SetCurrentLanguageNumber(-1);
+
+  set_language_number(-1);
   if (!set_language(0)) {
-    std::clog << "You need the default language installed to run the BBS." << std::endl;
+    LOG(ERROR) << "You need the default language installed to run the BBS.";
     return false;
   }
   return true;
 }
 
-void WApplication::read_gfile() {
-  if (gfilesec != nullptr) {
-    free(gfilesec);
-    gfilesec = nullptr;
-  }
-  gfilesec = static_cast<gfiledirrec *>(BbsAllocA(static_cast<long>(session()->max_gfilesec * sizeof(gfiledirrec))));
-  WWIV_ASSERT(gfilesec != nullptr);
-  File file(syscfg.datadir, GFILE_DAT);
-  if (!file.Open(File::modeBinary | File::modeReadOnly)) {
-    session()->num_sec = 0;
-  } else {
-    session()->num_sec = file.Read(gfilesec, session()->max_gfilesec * sizeof(gfiledirrec)) / sizeof(gfiledirrec);
+void Application::read_gfile() {
+  DataFile<gfiledirrec> file(FilePath(config()->datadir(), GFILE_DAT));
+  if (file) {
+    file.ReadVector(gfilesec, max_gfilesec);
   }
 }
 
-/**
- * Makes a path into an absolute path, returns true if original path altered,
- * else returns false
- */
-void WApplication::make_abs_path(char *pszDirectory) {
-  string base(GetHomeDir());
-  string dir(pszDirectory);
-  File::MakeAbsolutePath(base, &dir);
-  strcpy(pszDirectory, dir.c_str());
-}
-
-void WApplication::InitializeBBS() {
-  session()->localIO()->SetScreenBottom(session()->localIO()->GetDefaultScreenBottom());
-  defscreenbottom = session()->localIO()->GetDefaultScreenBottom();
-  // set default screenlinest
-  session()->screenlinest = defscreenbottom + 1;
-
-  session()->localIO()->LocalCls();
-#if !defined( __unix__ )
-  std::clog << std::endl << wwiv_version << beta_version << ", Copyright (c) 1998-2015, WWIV Software Services."
-            << std::endl << std::endl
+void Application::InitializeBBS() {
+  Cls();
+  std::clog << std::endl
+            << wwiv_version << beta_version << ", Copyright (c) 1998-2017, WWIV Software Services."
+            << std::endl
+            << std::endl
             << "\r\nInitializing BBS..." << std::endl;
-#endif // __unix__
-  session()->SetCurrentReadMessageArea(-1);
   use_workspace = false;
-  chat_file = false;
-  session()->localIO()->SetSysopAlert(false);
-  nsp = 0;
-  session()->capture()->set_global_handle(false, true);
-  bquote = 0;
-  equote = 0;
-  session()->SetQuoting(false);
-  session()->tagptr = 0;
 
-  time_t t = time(nullptr);
-  // Struct tm_year is -= 1900
-  struct tm * pTm = localtime(&t);
-  if (pTm->tm_year < 88) {
-    // TODO9(rushfan): Is this check really needed anymore?
-    std::clog << "You need to set the date [" << pTm->tm_year << "] & time before running the BBS." << std::endl;
-    AbortBBS();
-  }
-
-  if (!ReadConfig()) {
-    AbortBBS(true);
-  }
-
-  XINIT_PRINTF("Processing configuration file: WWIV.INI.");
-  if (!File::Exists(syscfgovr.tempdir)) {
-    if (!File::mkdirs(syscfgovr.tempdir)) {
-      std::clog << std::endl << "Your temp dir isn't valid." << std::endl;
-      std::clog << "It is now set to: '" << syscfgovr.tempdir << "'" << std::endl;
+  clearnsp();
+  VLOG(1) << "Processing configuration file: WWIV.INI.";
+  if (!File::Exists(temp_directory())) {
+    if (!File::mkdirs(temp_directory())) {
+      LOG(ERROR) << "Your temp dir isn't valid.";
+      LOG(ERROR) << "It is now set to: '" << temp_directory() << "'";
       AbortBBS();
     }
   }
 
-  if (!File::Exists(syscfgovr.batchdir)) {
-    if (!File::mkdirs(syscfgovr.batchdir)) {
-      std::clog << std::endl << "Your batch dir isn't valid." << std::endl;
-      std::clog << "It is now set to: '" << syscfgovr.batchdir << "'" << std::endl;
+  if (!File::Exists(batch_directory())) {
+    if (!File::mkdirs(batch_directory())) {
+      LOG(ERROR) << "Your batch dir isn't valid.";
+      LOG(ERROR) << "It is now set to: '" << batch_directory() << "'";
       AbortBBS();
     }
   }
@@ -1002,259 +658,179 @@ void WApplication::InitializeBBS() {
   write_inst(INST_LOC_INIT, 0, INST_FLAGS_NONE);
 
   // make sure it is the new USERREC structure
-  XINIT_PRINTF("Reading user scan pointers.");
-  File fileQScan(syscfg.datadir, USER_QSC);
+  VLOG(1) << "Reading user scan pointers.";
+  File fileQScan(FilePath(config()->datadir(), USER_QSC));
   if (!fileQScan.Exists()) {
-    std::clog << "Could not open file '" << fileQScan.full_pathname() << "'" << std::endl;
-    std::clog << "You must go into INIT and convert your userlist before running the BBS." << std::endl;
+    LOG(ERROR) << "Could not open file '" << fileQScan.full_pathname() << "'";
+    LOG(ERROR) << "You must go into wwivconfig and convert your userlist before running the BBS.";
     AbortBBS();
   }
 
-  if (!syscfgovr.primaryport) {
-    // On all platforms primaryport is now 1 (this case should only ever happen
-    // on an upgraded system.
-    syscfgovr.primaryport = 1;
-  }
-
-  languages = nullptr;
   if (!read_language()) {
     AbortBBS();
   }
 
-  net_networks = nullptr;
-  session()->SetNetworkNumber(0);
   read_networks();
-  set_net_num(0);
-
-  XINIT_PRINTF("Reading status information.");
-  WStatus* pStatus = statusMgr->BeginTransaction();
-  if (!pStatus) {
-    std::clog << "Unable to return status.dat." << std::endl;
+  if (!create_message_api()) {
     AbortBBS();
   }
 
-  XINIT_PRINTF("Reading color information.");
-  File fileColor(syscfg.datadir, COLOR_DAT);
-  if (!fileColor.Exists()) {
-    buildcolorfile();
+  VLOG(1) << "Reading status information.";
+  auto status = statusMgr->BeginTransaction();
+  if (!status) {
+    LOG(ERROR) << "Unable to return statusrec.dat.";
+    AbortBBS();
   }
-  get_colordata();
 
-  pStatus->SetWWIVVersion(wwiv_num_version);
-  pStatus->EnsureCallerNumberIsValid();
-  statusMgr->CommitTransaction(pStatus);
+  status->SetWWIVVersion(wwiv_num_version);
+  status->EnsureCallerNumberIsValid();
+  statusMgr->CommitTransaction(std::move(status));
 
-  gat = static_cast<unsigned short *>(BbsAllocA(2048 * sizeof(short)));
-  WWIV_ASSERT(gat != nullptr);
-
-  XINIT_PRINTF("Reading Gfiles.");
-  gfilesec = nullptr;
+  VLOG(1) << "Reading Gfiles.";
   read_gfile();
 
-  smallist = nullptr;
-
-  XINIT_PRINTF("Reading user names.");
+  VLOG(1) << "Reading user names.";
   if (!read_names()) {
     AbortBBS();
   }
 
-  XINIT_PRINTF("Reading Message Areas.");
-  subboards = nullptr;
+  VLOG(1) << "Reading Message Areas.";
   if (!read_subs()) {
     AbortBBS();
   }
 
-  XINIT_PRINTF("Reading File Areas.");
-  directories = nullptr;
+  VLOG(1) << "Reading File Areas.";
   if (!read_dirs()) {
     AbortBBS();
   }
 
-  XINIT_PRINTF("Reading Chains.");
-  session()->SetNumberOfChains(0);
-  chains = nullptr;
+  VLOG(1) << "Reading Chains.";
   read_chains();
 
-  XINIT_PRINTF("Reading File Transfer Protocols.");
-  externs = nullptr;
+  VLOG(1) << "Reading File Transfer Protocols.";
   read_nextern();
-
-  over_intern = nullptr;
   read_nintern();
 
-  XINIT_PRINTF("Reading File Archivers.");
+  VLOG(1) << "Reading File Archivers.";
   read_arcs();
-  SaveConfig();
 
-  XINIT_PRINTF("Reading Full Screen Message Editors.");
+  VLOG(1) << "Reading Full Screen Message Editors.";
   read_editors();
 
-  if (!File::mkdirs(m_attachmentDirectory)) {
-    std::clog << std::endl << "Your file attachment directory is invalid." << std::endl;
-    std::clog << "It is now set to: " << m_attachmentDirectory << "' << std::endl";
+  if (!File::mkdirs(attach_dir_)) {
+    LOG(ERROR) << "Your file attachment directory is invalid.";
+    LOG(ERROR) << "It is now set to: " << attach_dir_ << "'";
     AbortBBS();
   }
   CdHome();
 
   check_phonenum(); // dupphone addition
 
-  // allocate sub cache
-  iscan1(-1, false);
-
-  batch = static_cast<batchrec *>(BbsAllocA(session()->max_batch * sizeof(batchrec)));
-  WWIV_ASSERT(batch != nullptr);
-
-  XINIT_PRINTF("Reading User Information.");
-  session()->ReadCurrentUser(1, false);
-  fwaiting = (session()->user()->IsUserDeleted()) ? 0 : session()->user()->GetNumMailWaiting();
+  VLOG(1) << "Reading User Information.";
+  ReadCurrentUser(1);
   statusMgr->RefreshStatusCache();
-  session()->topdata = (syscfg.sysconfig & sysconfig_no_local) ? LocalIO::topdataNone : LocalIO::topdataUser;
+  topdata = LocalIO::topdataUser;
 
-  snprintf(g_szDSZLogFileName, sizeof(g_szDSZLogFileName), "%sdsz.log", syscfgovr.tempdir);
-#if !defined ( __unix__ ) && !defined ( __APPLE__ )
-  string newprompt = "WWIV: ";
-  const string old_prompt = environment_variable("PROMPT");
-  if (!old_prompt.empty()) {
-    newprompt.append(old_prompt);
-  } else {
-    newprompt.append("$P$G");
-  }
-  // put in our environment since passing the xenviron wasn't working
-  // with sync emulated fossil
-  set_environment_variable("PROMPT", newprompt);
-
+  // Set DSZLOG
+  dsz_logfile_name_ = FilePath(temp_directory(), "dsz.log");
   if (environment_variable("DSZLOG").empty()) {
-    set_environment_variable("DSZLOG", g_szDSZLogFileName);
+    set_environment_variable("DSZLOG", dsz_logfile_name_);
   }
-  // TODO(rushfan): we really shouldn't be using DOS pkzip anymore. Let's remove this.
-  // until then, I've at least commented what this is for.
-  // This allows DOS redirection of output. (see the addendum.doc for 2.04g) or
-  // see https://groups.google.com/forum/#!topic/comp.compression/KkVMQkA0FmA
-  set_environment_variable("PKNOFASTCHAR", "Y");
+  // SET BBS environment variable.
   set_environment_variable("BBS", wwiv_version);
+  context().InitalizeContext();
 
-#endif // defined ( __unix__ )
-
-  XINIT_PRINTF("Reading Voting Booth Configuration.");
-  read_voting();
-
-  XINIT_PRINTF("Reading External Events.");
+  VLOG(1) << "Reading External Events.";
   init_events();
-  last_time = time_event - timer();
-  if (last_time < 0.0) {
-    last_time += HOURS_PER_DAY_FLOAT * SECONDS_PER_HOUR_FLOAT;
-  }
 
-  XINIT_PRINTF("Allocating Memory for Message/File Areas.");
-  do_event = 0;
-  usub = static_cast<usersubrec *>(BbsAllocA(session()->GetMaxNumberMessageAreas() * sizeof(usersubrec)));
-  WWIV_ASSERT(usub != nullptr);
-  session()->m_SubDateCache = static_cast<unsigned int*>(BbsAllocA(session()->GetMaxNumberMessageAreas() * sizeof(
-                                   long)));
-  WWIV_ASSERT(session()->m_SubDateCache != nullptr);
+  VLOG(1) << "Allocating Memory for Message/File Areas.";
+  do_event_ = 0;
+  usub.resize(config()->max_subs());
+  udir.resize(config()->max_dirs());
+  uconfsub.resize(MAX_CONFERENCES);
+  uconfdir.resize(MAX_CONFERENCES);
 
-  udir = static_cast<usersubrec *>(BbsAllocA(session()->GetMaxNumberFileAreas() * sizeof(usersubrec)));
-  WWIV_ASSERT(udir != nullptr);
-  session()->m_DirectoryDateCache = static_cast<unsigned int*>(BbsAllocA(session()->GetMaxNumberFileAreas() *
-                                       sizeof(long)));
-  WWIV_ASSERT(session()->m_DirectoryDateCache != nullptr);
-
-  uconfsub = static_cast<userconfrec *>(BbsAllocA(MAX_CONFERENCES * sizeof(userconfrec)));
-  WWIV_ASSERT(uconfsub != nullptr);
-  uconfdir = static_cast<userconfrec *>(BbsAllocA(MAX_CONFERENCES * sizeof(userconfrec)));
-  WWIV_ASSERT(uconfdir != nullptr);
-
-  qsc = static_cast<uint32_t *>(BbsAllocA(syscfg.qscn_len));
-  WWIV_ASSERT(qsc != nullptr);
-  qsc_n = qsc + 1;
-  qsc_q = qsc_n + (session()->GetMaxNumberFileAreas() + 31) / 32;
-  qsc_p = qsc_q + (session()->GetMaxNumberMessageAreas() + 31) / 32;
-
-  network_extension = ".net";
-  const string wwiv_instance(environment_variable("WWIV_INSTANCE"));
+  network_extension_ = ".net";
+  const auto wwiv_instance = environment_variable("WWIV_INSTANCE");
   if (!wwiv_instance.empty()) {
-    int nTempInstanceNumber = atoi(wwiv_instance.c_str());
-    if (nTempInstanceNumber > 0) {
-      network_extension = StringPrintf(".%3.3d", nTempInstanceNumber);
-      // Fix... Set the global instance variable to match this.  When you run WWIV with the -n<instance> parameter
-      // it sets the WWIV_INSTANCE environment variable, however it wasn't doing the reverse.
-      instance_number_ = nTempInstanceNumber;
+    int inst_num = to_number<int>(wwiv_instance);
+    if (inst_num > 0) {
+      network_extension_ = StringPrintf(".%3.3d", inst_num);
+      // Fix... Set the global instance variable to match this.  When you run WWIV with the
+      // -n<instance> parameter it sets the WWIV_INSTANCE environment variable, however it wasn't
+      // doing the reverse.
+      instance_number_ = inst_num;
     }
   }
 
-  read_bbs_list_index();
   frequent_init();
-  if (!m_bUserAlreadyOn) {
+  if (!user_already_on_) {
     TempDisablePause disable_pause;
-    remove_from_temp("*.*", syscfgovr.tempdir, true);
-    remove_from_temp("*.*", syscfgovr.batchdir, true);
+    remove_from_temp("*.*", temp_directory(), false);
+    remove_from_temp("*.*", batch_directory(), false);
     cleanup_net();
   }
-  subconfnum = dirconfnum = 0;
 
-  XINIT_PRINTF("Reading Conferences.");
+  VLOG(1) << "Reading Conferences.";
   read_all_conferences();
 
-  if (!m_bUserAlreadyOn) {
-    sysoplog("", false);
-    sysoplogfi(false, "WWIV %s%s, inst %ld, brought up at %s on %s.", wwiv_version, beta_version, 
-        GetInstanceNumber(), times(), fulldate());
+  if (!user_already_on_) {
+    sysoplog(false);
+    sysoplog(false) << "WWIV " << wwiv_version << beta_version << ", inst " << instance_number()
+                    << ", brought up at " << times() << " on " << fulldate() << ".";
   }
-  if (GetInstanceNumber() > 1) {
-    char szFileName[MAX_PATH];
-    snprintf(szFileName, sizeof(szFileName), "%s.%3.3u", WWIV_NET_NOEXT, GetInstanceNumber());
-    File::Remove(szFileName);
+  if (instance_number() > 1) {
+    File::Remove(StringPrintf("%s.%3.3u", WWIV_NET_NOEXT, instance_number()));
   } else {
     File::Remove(WWIV_NET_DAT);
   }
 
-  srand(static_cast<unsigned int>(time(nullptr)));
   catsl();
 
-  XINIT_PRINTF("Saving Instance information.");
+  VLOG(1) << "Saving Instance information.";
   write_inst(INST_LOC_WFC, 0, INST_FLAGS_NONE);
 }
 
-
 // begin dupphone additions
 
-void WApplication::check_phonenum() {
-  File phoneFile(syscfg.datadir, PHONENUM_DAT);
+void Application::check_phonenum() {
+  File phoneFile(FilePath(config()->datadir(), PHONENUM_DAT));
   if (!phoneFile.Exists()) {
     create_phone_file();
   }
 }
 
-void WApplication::create_phone_file() {
+// TODO(rushfan): maybe move this to SDK, but pass in a vector of numbers.
+void Application::create_phone_file() {
   phonerec p;
 
-  File file(syscfg.datadir, USER_LST);
+  File file(FilePath(config()->datadir(), USER_LST));
   if (!file.Open(File::modeReadOnly | File::modeBinary)) {
     return;
   }
-  long lFileSize = file.GetLength();
+  auto file_size = file.length();
   file.Close();
-  int nNumberOfRecords = static_cast<int>(lFileSize / sizeof(userrec));
+  int numOfRecords = static_cast<int>(file_size / sizeof(userrec));
 
-  File phoneNumFile(syscfg.datadir, PHONENUM_DAT);
-  if (!phoneNumFile.Open(File::modeReadWrite | File::modeAppend | File::modeBinary | File::modeCreateFile)) {
+  File phoneNumFile(FilePath(config()->datadir(), PHONENUM_DAT));
+  if (!phoneNumFile.Open(File::modeReadWrite | File::modeAppend | File::modeBinary |
+                         File::modeCreateFile)) {
     return;
   }
 
-  for (int16_t nTempUserNumber = 1; nTempUserNumber <= nNumberOfRecords; nTempUserNumber++) {
-    WUser user;
-    application()->users()->ReadUser(&user, nTempUserNumber);
+  for (int16_t nTempUserNumber = 1; nTempUserNumber <= numOfRecords; nTempUserNumber++) {
+    User user;
+    users()->readuser(&user, nTempUserNumber);
     if (!user.IsUserDeleted()) {
       p.usernum = nTempUserNumber;
-      char szTempVoiceNumber[ 255 ], szTempDataNumber[ 255 ];
+      char szTempVoiceNumber[255], szTempDataNumber[255];
       strcpy(szTempVoiceNumber, user.GetVoicePhoneNumber());
       strcpy(szTempDataNumber, user.GetDataPhoneNumber());
       if (szTempVoiceNumber[0] && !strstr(szTempVoiceNumber, "000-")) {
         strcpy(reinterpret_cast<char*>(p.phone), szTempVoiceNumber);
         phoneNumFile.Write(&p, sizeof(phonerec));
       }
-      if (szTempDataNumber[0] &&
-          !IsEquals(szTempVoiceNumber, szTempDataNumber) &&
+      if (szTempDataNumber[0] && !IsEquals(szTempVoiceNumber, szTempDataNumber) &&
           !strstr(szTempVoiceNumber, "000-")) {
         strcpy(reinterpret_cast<char*>(p.phone), szTempDataNumber);
         phoneNumFile.Write(&p, sizeof(phonerec));
@@ -1262,29 +838,6 @@ void WApplication::create_phone_file() {
     }
   }
   phoneNumFile.Close();
-}
-
-uint32_t GetFlagsFromIniFile(IniFile *pIniFile, ini_flags_type * fs, int nFlagNumber, uint32_t flags) {
-  for (int i = 0; i < nFlagNumber; i++) {
-    const char* ss = INI_OPTIONS_ARRAY[ fs[i].strnum ];
-    if (ss && pIniFile->GetValue(ss)) {
-      if (pIniFile->GetBooleanValue(ss)) {
-        if (fs[i].sense) {
-          flags &= ~fs[i].value;
-        } else {
-          flags |= fs[i].value;
-        }
-      } else {
-        if (fs[i].sense) {
-          flags |= fs[i].value;
-        } else {
-          flags &= ~fs[i].value;
-        }
-      }
-    }
-  }
-
-  return flags;
 }
 
 // end dupphone additions

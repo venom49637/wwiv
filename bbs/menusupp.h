@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -30,7 +30,7 @@ void ValidateUser();
 void Chains();
 void TimeBank();
 void AutoMessage();
-void Defaults(wwiv::menus::MenuInstanceData* MenuData);
+void Defaults(bool& need_menu_reload);
 void SendEMail();
 void FeedBack();
 void Bulletins();
@@ -48,25 +48,19 @@ void TitleScan();
 void ListUsers();
 void Vote();
 void ToggleExpert();
-void ExpressScan();
 void WWIVVersion();
-void InstanceEdit();
 void JumpEdit();
 void BoardEdit();
 void ChainEdit();
 void ToggleChat();
 void ChangeUser();
-void CallOut();
-void Debug();
 void DirEdit();
 void EventEdit();
 void LoadTextFile();
 void EditText();
 void EditBulletins();
 void ReadAllMail();
-void RebootComputer();
 void ReloadMenus();
-void ResetFiles();
 void ResetQscan();
 void MemoryStatus();
 void PackMessages();
@@ -76,13 +70,11 @@ void ReadNetLog();
 void PrintPending();
 void PrintStatus();
 void TextEdit();
-void UserEdit();
 void VotePrint();
-void YesturdaysLog();
+void YesterdaysLog();
 void ZLog();
 void ViewNetDataLog();
 void UploadPost();
-void NetListing();
 void WhoIsOnline();
 void NewMsgsAllConfs();
 void MultiEmail();
@@ -90,8 +82,6 @@ void InternetEmail();
 void NewMsgScanFromHere();
 void ValidateScan();
 void ChatRoom();
-void DownloadPosts();
-void DownloadFileList();
 void ClearQScan();
 void FastGoodBye();
 void NewFilesAllConfs();

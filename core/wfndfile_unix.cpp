@@ -1,6 +1,6 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
+/*                              WWIV Version 5.x                          */
 /*             Copyright (C)1998-2007, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
@@ -18,109 +18,95 @@
 /**************************************************************************/
 #include "core/wfndfile.h"
 
+#include <cstring>
 #include <string>
 
 #include <dirent.h>
+#include <fnmatch.h>
+#include <libgen.h>
 #include <limits.h>
 #include <iostream>
+#include <sys/stat.h>
+#include "core/file.h"
+#include "core/log.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
 
-static int dos_flag = false;
-static long lTypeMask;
+static WFindFileTypeMask s_typemask;
 static const char* filespec_ptr;
-
-#define TYPE_DIRECTORY  DT_DIR
-#define TYPE_FILE DT_BLK
+static std::string s_path;
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::strings;
 
 //////////////////////////////////////////////////////////////////////////////
-// Local function prototypes
-char *getdir_from_file(const char *pszFileName);
-int fname_ok(const struct dirent *ent);
-char *strip_filename(const char *pszFileName);
+//
+// Local functions
+//
 
+static int fname_ok(const struct dirent *ent) {
+  if (IsEquals(ent->d_name, ".") || IsEquals(ent->d_name, "..")) {
+    return 0;
+  }
 
-bool WFindFile::open(const string& filespec, unsigned int nTypeMask) {
-  char szFileName[PATH_MAX];
-  char szDirectoryName[PATH_MAX];
-  char szFileSpec[PATH_MAX+1];
-  unsigned int i, f, laststar;
-  memset(szFileSpec, 0, PATH_MAX + 1);
+  if (s_typemask != WFindFileTypeMask::WFINDFILE_ANY) {
+    mode_t mode = 0;
+#ifdef _DIRENT_HAVE_D_TYPE
+    mode = DTTOIF(ent->d_type);
+#else
+    struct stat s;
+    std::string fullpath = FilePath(s_path, ent->d_name);
+    stat(fullpath.c_str(), &s);
+    mode = s.st_mode;
+#endif  // _DIRENT_HAVE_D_TYPE
+    if ((S_ISDIR(mode)) && !(s_typemask == WFindFileTypeMask::WFINDFILE_DIRS)) {
+      return 0;
+    } else if ((S_ISREG(mode)) && !(s_typemask == WFindFileTypeMask::WFINDFILE_FILES)) {
+      return 0;
+    }
+  }
+#if defined(__sun)
+  int result = fnmatch(filespec_ptr, ent->d_name, FNM_PATHNAME | FNM_IGNORECASE);
+#else
+  int result = fnmatch(filespec_ptr, ent->d_name, FNM_PATHNAME | FNM_CASEFOLD);
+#endif
+  VLOG(3) << "fnmatch: " << filespec_ptr << ";" << ent->d_name << "; " << result << "\r\n";
 
+  if (result == 0) {
+    // fnmatch returns 0 on match. We return nonzero.
+    return 1;
+  }
+  return 0;
+}
+
+bool WFindFile::open(const string& filespec, WFindFileTypeMask nTypeMask) {
   __open(filespec, nTypeMask);
-  dos_flag = 0;
+  filename_.clear();
 
-  strcpy(szDirectoryName, getdir_from_file(filespec.c_str()));
-  strcpy(szFileName, strip_filename(filespec.c_str()));
-
-  if (wwiv::strings::IsEquals(szFileName, "*.*")  ||
-      wwiv::strings::IsEquals(szFileName, "*")) {
-    memset(szFileSpec, '?', PATH_MAX);
-  } else {
-    f = laststar = szFileSpec[0] = 0;
-    for (i = 0; i < strlen(szFileName); i++) {
-      if (szFileName[i] == '*') {
-        if (i < 8) {
-          if (strchr(szFileName, '.') != NULL) {
-            dos_flag = 1;
-            memset(&szFileSpec[f], '?', 8 - i);
-            f += 8 - i;
-            while (szFileName[++i] != '.')
-              ;
-            i--;
-
-            continue;
-          }
-        }
-
-        do {
-          if (szFileName[i] == '.' && i < strlen(szFileName)) {
-            szFileSpec[f++] = '.';
-            break;
-          }
-          szFileSpec[f++] = '?';
-        } while (++i < PATH_MAX);
-
-      } else {
-        szFileSpec[f++] = szFileName[i];
-      }
-    }
-
-    if (strchr(szFileSpec, '.') == NULL && f < PATH_MAX) {
-      memset(&szFileSpec[f], '?', PATH_MAX - f);
-    }
-
-    if (strstr(szFileName, ".*") != NULL && dos_flag) {
-      memset(&szFileSpec[9], '?', 3);
-    }
-
-    if (strlen(szFileSpec) < PATH_MAX && !dos_flag) {
-      memset(&szFileSpec[f], 32, PATH_MAX - f);
-    }
-
+  {
+    char path[FILENAME_MAX];
+    to_char_array(path, filespec);
+    dir_ = dirname(path);
   }
-  szFileSpec[PATH_MAX] = 0;
-
-  if (dos_flag) {
-    szFileSpec[12] = 0;
+  {
+    char path[FILENAME_MAX];
+    to_char_array(path, filespec);
+    filespec_ = basename(path);
+    filespec_ptr = filespec_.c_str();
   }
 
-  filespec_.assign(szFileSpec);
-  filespec_ptr = filespec_.c_str();
-  filename_.assign(szFileName);
-
-  nMatches = scandir(szDirectoryName, &entries, fname_ok, alphasort);
+  s_typemask = type_mask_;
+  s_path = dir_;
+  nMatches = scandir(dir_.c_str(), &entries, fname_ok, alphasort);
   if (nMatches < 0) {
-    std::cout << "could not open dir '" << szDirectoryName << "'\r\n";
     perror("scandir");
     return false;
   }
   nCurrentEntry = 0;
 
   next();
-  return (nMatches > 0);
+  return nMatches > 0;
 }
 
 bool WFindFile::next() {
@@ -129,9 +115,21 @@ bool WFindFile::next() {
   }
   struct dirent *entry = entries[nCurrentEntry++];
 
-  filename_.assign(entry->d_name);
-  lFileSize = entry->d_reclen;
-  nFileType = entry->d_type;
+  filename_ = entry->d_name;
+  file_size_ = entry->d_reclen;
+
+#ifdef _DIRENT_HAVE_D_TYPE
+  file_type_ = DTTOIF(entry->d_type);
+
+#else
+  struct stat s;
+  string fullpath = FilePath(dir_, entry->d_name);
+  if (stat(fullpath.c_str(), &s) == 0) {
+    file_type_ = s.st_mode;
+  } else {
+    file_type_ = 0;
+  }
+#endif  // _DIRENT_HAVE_D_TYPE
 
   return true;
 }
@@ -145,142 +143,14 @@ bool WFindFile::IsDirectory() {
   if (nCurrentEntry > nMatches) {
     return false;
   }
-
-  return (nFileType & DT_DIR);
+  return S_ISDIR(file_type_);
 }
 
 bool WFindFile::IsFile() {
   if (nCurrentEntry > nMatches) {
     return false;
   }
-
-  return (nFileType & DT_REG);
+  return S_ISREG(file_type_);
 }
 
 
-//////////////////////////////////////////////////////////////////////////////
-//
-// Local functions
-//
-char *getdir_from_file(const char *pszFileName) {
-  static char s[256];
-  int i;
-
-  s[0] = '\0';
-  for (i = strlen(pszFileName); i > -1; i--) {
-    if (pszFileName[i] == '/') {
-      strcpy(s, pszFileName);
-      s[i] = '\0';
-      break;
-    }
-  }
-
-  if (!s[0]) {
-    strcpy(s, "./");
-  }
-  return (s);
-}
-
-int fname_ok(const struct dirent *ent) {
-  int ok, i;
-  char f[13], *ptr = NULL, s3[13];
-  // kinda a hack but there's no way to pass parameters into this easily.
-  const char *s1 = filespec_ptr;
-  const char *s2 = ent->d_name;
-
-  if (wwiv::strings::IsEquals(s2, ".") ||
-      wwiv::strings::IsEquals(s2, "..")) {
-    return 0;
-  }
-
-  if (lTypeMask) {
-    if (ent->d_type & TYPE_DIRECTORY && !(lTypeMask & WFINDFILE_DIRS)) {
-      return 0;
-    } else if (ent->d_type & TYPE_FILE && !(lTypeMask & WFINDFILE_FILES)) {
-      return 0;
-    }
-  }
-
-  ok = 1;
-
-  f[0] = '\0';
-  if (dos_flag) {
-    if (strlen(s2) > 12 || s2[0] == '.') {
-      return 0;
-    }
-
-    strcpy(s3, s2);
-    if (strlen(s3) < 12 && (ptr = strchr(s3, '.')) != NULL) {
-      *ptr = '\0';
-      strcpy(f, s3);
-      for (i = strlen(f); i < 8; i++) {
-        f[i] = '?';
-      }
-
-      f[i] = '.';
-      f[++i] = '\0';
-      strcat(f, ptr + 1);
-
-      if (strlen(f) < 12) {
-        memset(&f[strlen(f)], 32, 12 - strlen(f));
-      }
-
-      f[12] = '\0';
-    } else {
-      if (ptr == NULL) {
-        return 0;
-      }
-    }
-  }
-
-  if (!dos_flag) {
-    for (i = 0; i < PATH_MAX && ok; i++) {
-      if ((s1[i] != s2[i]) && (s1[i] != '?') && (s2[i] != '?')) {
-        ok = 0;
-      }
-    }
-  } else {
-    for (i = 0; i < 12 && ok; i++) {
-      if (s1[i] != f[i]) {
-        if (s1[i] != '?') {
-          ok = 0;
-        }
-      }
-    }
-  }
-
-  return ok;
-}
-
-char *strip_filename(const char *pszFileName) {
-  WWIV_ASSERT(pszFileName);
-  static char szStaticFileName[15];
-  char szTempFileName[PATH_MAX];
-
-  int nSepIndex = -1;
-  for (int i = 0; i < strlen(pszFileName); i++) {
-    if (pszFileName[i] == '\\' || pszFileName[i] == ':' || pszFileName[i] == '/') {
-      nSepIndex = i;
-    }
-  }
-  if (nSepIndex != -1) {
-    strcpy(szTempFileName, &(pszFileName[nSepIndex + 1]));
-  } else {
-    strcpy(szTempFileName, pszFileName);
-  }
-  for (int i1 = 0; i1 < strlen(szTempFileName); i1++) {
-    if (szTempFileName[i1] >= 'A' && szTempFileName[i1] <= 'Z') {
-      szTempFileName[i1] = szTempFileName[i1] - 'A' + 'a';
-    }
-  }
-  int j = 0;
-  while (szTempFileName[j] != 0) {
-    if (szTempFileName[j] == 32) {
-      strcpy(&szTempFileName[j], &szTempFileName[j + 1]);
-    } else {
-      ++j;
-    }
-  }
-  strcpy(szStaticFileName, szTempFileName);
-  return szStaticFileName;
-}

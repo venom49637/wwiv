@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,7 +18,10 @@
 #ifndef __INCLUDED_BBS_CONFUTIL_H__
 #define __INCLUDED_BBS_CONFUTIL_H__
 
-void setuconf(int nConferenceType, int num, int nOldSubNumber);
+enum class ConferenceType { CONF_SUBS, CONF_DIRS };
+
+
+void setuconf(ConferenceType type, int num, int old_subnum);
 void changedsl();
 
 #endif  // __INCLUDED_BBS_CONFUTIL_H__

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*               Copyright (C)2015 WWIV Software Services                 */
+/*                          WWIV Version 5.x                              */
+/*            Copyright (C)2015-2017, WWIV Software Services              */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -56,7 +56,7 @@ bool PhoneNumbers::insert(int user_number, const std::string& phone_number) {
 
 bool PhoneNumbers::erase(int user_number, const std::string& phone_number) {
   auto predicate = [=](const phonerec& p) {
-    return phone_number == p.phone;
+    return phone_number == p.phone && p.usernum == user_number;
   };
   phones_.erase(std::remove_if(std::begin(phones_), std::end(phones_), predicate));
   return Save();
@@ -74,8 +74,8 @@ int PhoneNumbers::find(const std::string& phone_number) const {
 }
 
 bool PhoneNumbers::Load() {
-  DataFile<phonerec> file(datadir_, PHONENUM_DAT,
-      File::modeReadWrite | File::modeBinary | File::modeCreateFile);
+  DataFile<phonerec> file(FilePath(datadir_, PHONENUM_DAT),
+                          File::modeReadWrite | File::modeBinary | File::modeCreateFile);
   if (!file) {
     return false;
   }
@@ -87,8 +87,9 @@ bool PhoneNumbers::Load() {
 }
 
 bool PhoneNumbers::Save() {
-  DataFile<phonerec> file(datadir_, PHONENUM_DAT,
-      File::modeReadWrite | File::modeBinary | File::modeCreateFile | File::modeTruncate);
+  DataFile<phonerec> file(FilePath(datadir_, PHONENUM_DAT), File::modeReadWrite | File::modeBinary |
+                                                                File::modeCreateFile |
+                                                                File::modeTruncate);
   if (!file) {
     return false;
   }

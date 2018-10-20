@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015,WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,10 +19,10 @@
 #include "core/file.h"
 #ifdef _WIN32
 // Always declare wwiv_windows.h first to avoid collisions on defines.
-#include "bbs/wwiv_windows.h"
+#include "core/wwiv_windows.h"
 
 #include "Shlwapi.h"
-#endif  // _WIN32
+#endif // _WIN32
 
 #include <algorithm>
 #include <cerrno>
@@ -30,27 +30,29 @@
 #include <fcntl.h>
 #include <iostream>
 #ifdef _WIN32
+#include "sys/utime.h"
 #include <direct.h>
 #include <io.h>
 #include <share.h>
-#endif  // _WIN32
+
+#else
+#include <sys/file.h>
+#include <unistd.h>
+#include <utime.h>
+
+#endif // _WIN32
+
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
-#ifndef _WIN32
-#include <sys/file.h>
-#include <unistd.h>
-#endif  // _WIN32
+#include <sys/types.h>
 
+#include "core/datetime.h"
+#include "core/log.h"
+#include "core/os.h"
+#include "core/strings.h"
 #include "core/wfndfile.h"
 #include "core/wwivassert.h"
-
-#if !defined( O_BINARY )
-#define O_BINARY 0
-#endif
-#if !defined( O_TEXT )
-#define O_TEXT 0
-#endif
 
 #ifdef _WIN32
 
@@ -59,62 +61,79 @@
 
 #if !defined(ftruncate)
 #define ftruncate chsize
-#endif  // ftruncate
+#endif // ftruncate
+#define flock(h, m)                                                                                \
+  { (h), (m); }
+static constexpr int LOCK_SH = 1;
+static constexpr int LOCK_EX = 2;
+static constexpr int LOCK_NB = 4;
+static constexpr int LOCK_UN = 8;
+static constexpr int F_OK = 0;
 
-#define flock(h, m)
-#define F_OK 0
+#define S_ISREG(m) (((m)&S_IFMT) == _S_IFREG)
+#define S_ISDIR(m) (((m)&S_IFMT) == _S_IFDIR)
 
-#else 
+#else
 
-#define _access access
-#define Sleep(x) usleep((x)*1000)
+// Not Win32
 #define _sopen(n, f, s, p) open(n, f, 0644)
 
-#endif  // _WIN32
-
+#endif // _WIN32
 
 using std::string;
+using std::chrono::milliseconds;
+using namespace wwiv::os;
+
+namespace wwiv {
+namespace core {
 
 /////////////////////////////////////////////////////////////////////////////
 // Constants
 
 const int File::modeDefault = (O_RDWR | O_BINARY);
-const int File::modeAppend         = O_APPEND;
-const int File::modeBinary         = O_BINARY;
-const int File::modeCreateFile     = O_CREAT;
-const int File::modeReadOnly       = O_RDONLY;
-const int File::modeReadWrite      = O_RDWR;
-const int File::modeText           = O_TEXT;
-const int File::modeWriteOnly      = O_WRONLY;
-const int File::modeTruncate       = O_TRUNC;
+const int File::modeAppend = O_APPEND;
+const int File::modeBinary = O_BINARY;
+const int File::modeCreateFile = O_CREAT;
+const int File::modeReadOnly = O_RDONLY;
+const int File::modeReadWrite = O_RDWR;
+const int File::modeText = O_TEXT;
+const int File::modeWriteOnly = O_WRONLY;
+const int File::modeTruncate = O_TRUNC;
+const int File::modeExclusive = O_EXCL;
 
-const int File::modeUnknown        = -1;
-const int File::shareUnknown       = -1;
+const int File::modeUnknown = -1;
+const int File::shareUnknown = -1;
 
-const int File::seekBegin          = SEEK_SET;
-const int File::seekCurrent        = SEEK_CUR;
-const int File::seekEnd            = SEEK_END;
+const int File::invalid_handle = -1;
 
-const int File::invalid_handle     = -1;
+static const std::chrono::milliseconds wait_time(10);
 
-WLogger*  File::logger_;
-int File::debug_level_;
+static constexpr int TRIES = 100;
 
-static const int WAIT_TIME_SECONDS = 10;
-static const int TRIES = 100;
+using namespace wwiv::strings;
+
+string FilePath(const string& dirname, const string& filename) {
+  return (dirname.empty()) ? filename : StrCat(File::EnsureTrailingSlash(dirname), filename);
+}
+
+bool backup_file(const std::string& path) {
+  const auto now = DateTime::now();
+  const auto date_string = now.to_string("%Y%m%d%H%M%S");
+  const auto backup_extension = StrCat(".backup.", date_string);
+  const auto backup_path = StrCat(path, backup_extension);
+  VLOG(1) << "Backing up file: '" << path << "'; to: '" << backup_path << "'";
+  return File::Copy(path, backup_path);
+}
+
+bool backup_file(const File& file) { return backup_file(file.full_pathname()); }
 
 /////////////////////////////////////////////////////////////////////////////
 // Constructors/Destructors
 
-File::File() : handle_(File::invalid_handle) {}
+File::File(const string& full_file_name) : full_path_name_(full_file_name) {}
 
-File::File(const string& full_file_name) : File() {
-  this->SetName(full_file_name);
-}
-
-File::File(const string& dir, const string& filename) : File() {
-  this->SetName(dir, filename);
-}
+// File::File(const string& dir, const string& filename) : File(wwiv::core::FilePath(dir, filename))
+// {}
 
 File::~File() {
   if (this->IsOpen()) {
@@ -122,52 +141,47 @@ File::~File() {
   }
 }
 
-bool File::Open(int nFileMode, int nShareMode) {
-  WWIV_ASSERT(this->IsOpen() == false);
+bool File::Open(int file_mode, int share_mode) {
+  DCHECK_EQ(this->IsOpen(), false) << "File " << full_path_name_ << " is already open.";
 
   // Set default share mode
-  if (nShareMode == File::shareUnknown) {
-    nShareMode = shareDenyWrite;
-    if ((nFileMode & File::modeReadWrite) ||
-        (nFileMode & File::modeWriteOnly)) {
-      nShareMode = File::shareDenyReadWrite;
+  if (share_mode == File::shareUnknown) {
+    share_mode = shareDenyWrite;
+    if ((file_mode & File::modeReadWrite) || (file_mode & File::modeWriteOnly)) {
+      share_mode = File::shareDenyReadWrite;
     }
   }
 
-  WWIV_ASSERT(nShareMode != File::shareUnknown);
-  WWIV_ASSERT(nFileMode != File::modeUnknown);
+  CHECK_NE(share_mode, File::shareUnknown);
+  CHECK_NE(file_mode, File::modeUnknown);
 
-  if (debug_level_ > 2) {
-    logger_->LogMessage("\rSH_OPEN %s, access=%u\r\n", full_path_name_.c_str(), nFileMode);
-  }
+  VLOG(3) << "SH_OPEN " << full_path_name_ << ", access=" << file_mode;
 
-  handle_ = _sopen(full_path_name_.c_str(), nFileMode, nShareMode, _S_IREAD | _S_IWRITE);
+  handle_ = _sopen(full_path_name_.c_str(), file_mode, share_mode, _S_IREAD | _S_IWRITE);
   if (handle_ < 0) {
+    VLOG(3) << "1st _sopen: handle: " << handle_ << "; error: " << strerror(errno);
     int count = 1;
     if (access(full_path_name_.c_str(), 0) != -1) {
-      Sleep(WAIT_TIME_SECONDS);
-      handle_ = _sopen(full_path_name_.c_str(), nFileMode, nShareMode, _S_IREAD | _S_IWRITE);
+      sleep_for(wait_time);
+      handle_ = _sopen(full_path_name_.c_str(), file_mode, share_mode, _S_IREAD | _S_IWRITE);
       while ((handle_ < 0 && errno == EACCES) && count < TRIES) {
-        Sleep((count % 2) ? WAIT_TIME_SECONDS : 0);
-        if (debug_level_ > 0) {
-          logger_->LogMessage("\rWaiting to access %s %d.  \r", full_path_name_.c_str(), TRIES - count);
-        }
+        sleep_for((count % 2) ? wait_time : milliseconds(0));
+        VLOG(3) << "Waiting to access " << full_path_name_ << "  " << TRIES - count;
         count++;
-        handle_ = _sopen(full_path_name_.c_str(), nFileMode, nShareMode, _S_IREAD | _S_IWRITE);
+        handle_ = _sopen(full_path_name_.c_str(), file_mode, share_mode, _S_IREAD | _S_IWRITE);
       }
 
-      if ((handle_ < 0) && (debug_level_ > 0)) {
-        logger_->LogMessage("\rThe file %s is busy.  Try again later.\r\n", full_path_name_.c_str());
+      if (handle_ < 0) {
+        VLOG(3) << "The file " << full_path_name_ << " is busy.  Try again later.";
       }
     }
   }
 
-  if (debug_level_ > 1) {
-    logger_->LogMessage("\rSH_OPEN %s, access=%u, handle=%d.\r\n", full_path_name_.c_str(), nFileMode, handle_);
-  }
+  VLOG(3) << "SH_OPEN " << full_path_name_ << ", access=" << file_mode << ", handle=" << handle_;
 
   if (File::IsFileHandleValid(handle_)) {
-    flock(handle_, (nShareMode & shareDenyWrite) ? LOCK_EX : LOCK_SH);
+    flock(handle_,
+          (share_mode == shareDenyReadWrite || share_mode == shareDenyWrite) ? LOCK_EX : LOCK_SH);
   }
 
   if (handle_ == File::invalid_handle) {
@@ -178,6 +192,7 @@ bool File::Open(int nFileMode, int nShareMode) {
 }
 
 void File::Close() {
+  VLOG(3) << "CLOSE " << full_path_name_ << ", handle=" << handle_;
   if (File::IsFileHandleValid(handle_)) {
     flock(handle_, LOCK_UN);
     close(handle_);
@@ -188,50 +203,39 @@ void File::Close() {
 /////////////////////////////////////////////////////////////////////////////
 // Member functions
 
-bool File::SetName(const string& fileName) {
-  full_path_name_ = fileName;
-  return true;
-}
-
-bool File::SetName(const string& dirName, const string& fileName) {
-  std::stringstream fullPathName;
-  fullPathName << dirName;
-  if (!dirName.empty() && dirName[dirName.length() - 1] == pathSeparatorChar) {
-    fullPathName << fileName;
-  } else {
-    fullPathName << pathSeparatorChar << fileName;
-  }
-  return SetName(fullPathName.str());
-}
-
-int File::Read(void* pBuffer, size_t nCount) {
-  int ret = read(handle_, pBuffer, nCount);
+ssize_t File::Read(void* buffer, size_t size) {
+  ssize_t ret = read(handle_, buffer, size);
   if (ret == -1) {
-    std::cout << "[DEBUG: Read errno: " << errno << " -- Please screen capture this and email to Rushfan]\r\n";
+    LOG(ERROR) << "[DEBUG: Read errno: " << errno << " filename: " << full_path_name_
+               << " size: " << size;
+    LOG(ERROR) << " -- Please screen capture this and attach to a bug here: " << std::endl;
+    LOG(ERROR) << "https://github.com/wwivbbs/wwiv/issues" << std::endl;
   }
-  // TODO: Make this an WWIV_ASSERT once we get rid of these issues
   return ret;
 }
 
-int File::Write(const void* pBuffer, size_t nCount) {
-  int nRet = write(handle_, pBuffer, nCount);
-  if (nRet == -1) {
-    std::cout << "[DEBUG: Write errno: " << errno << " -- Please screen capture this and email to Rushfan]\r\n";
+ssize_t File::Write(const void* buffer, size_t size) {
+  ssize_t r = write(handle_, buffer, size);
+  if (r == -1) {
+    LOG(ERROR) << "[DEBUG: Write errno: " << errno << " filename: " << full_path_name_
+               << " size: " << size;
+    LOG(ERROR) << " -- Please screen capture this and attach to a bug here: " << std::endl;
+    LOG(ERROR) << "https://github.com/wwivbbs/wwiv/issues" << std::endl;
   }
-  // TODO: Make this an WWIV_ASSERT once we get rid of these issues
-  return nRet;
+  return r;
 }
 
-long File::Seek(long lOffset, int nFrom) {
-  WWIV_ASSERT(nFrom == File::seekBegin || nFrom == File::seekCurrent || nFrom == File::seekEnd);
-  WWIV_ASSERT(File::IsFileHandleValid(handle_));
+off_t File::Seek(off_t offset, Whence whence) {
+  CHECK(whence == File::Whence::begin || whence == File::Whence::current ||
+        whence == File::Whence::end);
+  CHECK(File::IsFileHandleValid(handle_));
 
-  return lseek(handle_, lOffset, nFrom);
+  return lseek(handle_, offset, static_cast<int>(whence));
 }
 
-bool File::Exists() const {
-  return File::Exists(full_path_name_);
-}
+off_t File::current_position() const { return lseek(handle_, 0, SEEK_CUR); }
+
+bool File::Exists() const { return File::Exists(full_path_name_); }
 
 bool File::Delete() {
   if (this->IsOpen()) {
@@ -240,34 +244,68 @@ bool File::Delete() {
   return unlink(full_path_name_.c_str()) == 0;
 }
 
-void File::SetLength(long lNewLength) {
+void File::set_length(off_t lNewLength) {
   WWIV_ASSERT(File::IsFileHandleValid(handle_));
   ftruncate(handle_, lNewLength);
 }
 
-bool File::IsFile() const {
-  return !this->IsDirectory();
+bool File::IsFile() const { return !this->IsDirectory(); }
+
+bool File::SetFilePermissions(int perm) { return chmod(full_path_name_.c_str(), perm) == 0; }
+
+bool File::IsDirectory() const {
+  return File::is_directory(full_path_name_);
 }
 
-bool File::SetFilePermissions(int nPermissions) {
-  return chmod(full_path_name_.c_str(), nPermissions) == 0;
+// static
+bool File::is_directory(const std::string& path) {
+  struct stat statbuf {};
+  stat(path.c_str(), &statbuf);
+  return S_ISDIR(statbuf.st_mode);
+}
+
+
+off_t File::length() {
+  // stat/fstat is the 32 bit version on WIN32
+  struct stat fileinfo {};
+
+  if (IsOpen()) {
+    // File is open, use fstat
+    if (fstat(handle_, &fileinfo) != 0) {
+      return 0;
+    }
+  } else {
+    // stat works on filenames, not filehandles.
+    if (stat(full_path_name_.c_str(), &fileinfo) != 0) {
+      return 0;
+    }
+  }
+  return fileinfo.st_size;
+}
+
+time_t File::creation_time() {
+  struct stat buf {};
+  // st_ctime is creation time on windows and status change time on posix
+  // so that's probably the closest to what we want.
+  return (stat(full_path_name_.c_str(), &buf) == -1) ? 0 : buf.st_ctime;
+}
+
+time_t File::last_write_time() {
+  struct stat buf {};
+  return (stat(full_path_name_.c_str(), &buf) == -1) ? 0 : buf.st_mtime;
 }
 
 /////////////////////////////////////////////////////////////////////////////
 // Static functions
 
-bool File::Rename(const string& origFileName, const string& newFileName) {
-  return rename(origFileName.c_str(), newFileName.c_str()) == 0;
+bool File::Rename(const string& orig_fn, const string& new_fn) {
+  return rename(orig_fn.c_str(), new_fn.c_str()) == 0;
 }
 
-bool File::Remove(const string& fileName) {
-  return (unlink(fileName.c_str()) ? false : true);
-}
+bool File::Remove(const string& filename) { return unlink(filename.c_str()) == 0; }
 
-bool File::Remove(const string& directoryName, const string& fileName) {
-  string strFullFileName = directoryName;
-  strFullFileName += fileName;
-  return File::Remove(strFullFileName);
+bool File::Remove(const string& dir, const string& file) {
+  return File::Remove(wwiv::core::FilePath(dir, file));
 }
 
 bool File::Exists(const string& original_pathname) {
@@ -282,43 +320,47 @@ bool File::Exists(const string& original_pathname) {
     // If the pathname ends in / or \, then remove the last character.
     fn.pop_back();
   }
-  int ret = _access(fn.c_str(), F_OK);
+  auto ret = access(fn.c_str(), F_OK);
   return ret == 0;
 }
 
-bool File::Exists(const string& directoryName, const string& fileName) {
-  std::stringstream fullPathName;
-  if (!directoryName.empty() && directoryName[directoryName.length() - 1] == pathSeparatorChar) {
-    fullPathName << directoryName << fileName;
-  } else {
-    fullPathName << directoryName << pathSeparatorChar << fileName;
-  }
-  return Exists(fullPathName.str());
+// static
+bool File::Exists(const string& dir, const string& file) {
+  return Exists(wwiv::core::FilePath(dir, file));
 }
 
-bool File::ExistsWildcard(const string& wildCard) {
+// static
+bool File::ExistsWildcard(const string& wildcard) {
   WFindFile fnd;
-  return fnd.open(wildCard.c_str(), 0);
+  return fnd.open(wildcard, WFindFileTypeMask::WFINDFILE_ANY);
 }
 
-bool File::SetFilePermissions(const string& fileName, int nPermissions) {
-  WWIV_ASSERT(!fileName.empty());
-  return chmod(fileName.c_str(), nPermissions) == 0;
+bool File::SetFilePermissions(const string& filename, int perm) {
+  CHECK(!filename.empty());
+  return chmod(filename.c_str(), perm) == 0;
 }
 
-bool File::IsFileHandleValid(int hFile) {
-  return hFile != File::invalid_handle;
-}
+bool File::IsFileHandleValid(int handle) { return handle != File::invalid_handle; }
 
 //static
+std::string File::EnsureTrailingSlash(const std::string& path) {
+  auto s = path;
+  EnsureTrailingSlash(&s);
+  return s;
+}
+
+// static
 void File::EnsureTrailingSlash(string* path) {
-  char last_char = path->back();
+  if (path->empty()) {
+    return;
+  }
+  auto last_char = path->back();
   if (last_char != File::pathSeparatorChar) {
     path->push_back(File::pathSeparatorChar);
   }
 }
 
-// static 
+// static
 string File::current_directory() {
   char s[MAX_PATH];
   getcwd(s, MAX_PATH);
@@ -326,20 +368,42 @@ string File::current_directory() {
 }
 
 // static
-bool File::set_current_directory(const string& dir) {
-  return chdir(dir.c_str()) == 0;
+bool File::set_current_directory(const string& dir) { return chdir(dir.c_str()) == 0; }
+
+// static
+void File::FixPathSeparators(std::string* name) {
+#ifdef _WIN32
+  std::replace(std::begin(*name), std::end(*name), '/', File::pathSeparatorChar);
+#else
+  std::replace(std::begin(*name), std::end(*name), '\\', File::pathSeparatorChar);
+#endif // _WIN32
 }
 
 // static
-void File::MakeAbsolutePath(const string& base, string* relative) {
-  if (!File::IsAbsolutePath(*relative)) {
-    File dir(base, *relative);
+std::string File::FixPathSeparators(const std::string& path) {
+  auto s = path;
+  FixPathSeparators(&s);
+  return s;
+}
+
+// static
+void File::absolute(const string& base, string* relative) {
+  if (!File::is_absolute(*relative)) {
+    File dir(FilePath(base, *relative));
     relative->assign(dir.full_pathname());
   }
 }
 
 // static
-bool File::IsAbsolutePath(const string& path) {
+string File::absolute(const std::string& base, const std::string& relative) {
+  if (File::is_absolute(relative)) {
+    return relative;
+  }
+  return FilePath(base, relative);
+}
+
+// static
+bool File::is_absolute(const string& path) {
   if (path.empty()) {
     return false;
   }
@@ -347,7 +411,7 @@ bool File::IsAbsolutePath(const string& path) {
   return ::PathIsRelative(path.c_str()) ? false : true;
 #else
   return path.front() == File::pathSeparatorChar;
-#endif  // _WIN32
+#endif // _WIN32
 }
 
 #ifdef _WIN32
@@ -358,36 +422,66 @@ bool File::IsAbsolutePath(const string& path) {
 
 // static
 bool File::mkdir(const string& path) {
-  int result = MKDIR(path.c_str());
+  auto result = MKDIR(path.c_str());
   if (result != -1) {
     return true;
   }
-  if (errno == EEXIST) {
-    // still return true if the directory already existed.
-    return true;
-  }
-  return false;
+  return errno == EEXIST;
 }
 
 // static
-// based loosely on http://stackoverflow.com/questions/675039/how-can-i-create-directory-tree-in-c-linux
+// based loosely on
+// http://stackoverflow.com/questions/675039/how-can-i-create-directory-tree-in-c-linux
 bool File::mkdirs(const string& path) {
-  int result = MKDIR(path.c_str());
+  auto result = MKDIR(path.c_str());
   if (result != -1) {
     return true;
   }
   if (errno == ENOENT) {
-    if (!mkdirs(path.substr(0, path.find_last_of(File::pathSeparatorChar)))) {
-      return false;  // failed to create the parent, stop here.
+    auto pos = path.find_last_of(File::pathSeparatorChar);
+    if (pos == string::npos) {
+      return false;
     }
-    return File::mkdir(path.c_str());
+    auto s = path.substr(0, pos);
+    if (!mkdirs(s)) {
+      return false; // failed to create the parent, stop here.
+    }
+    return File::mkdir(path);
   } else if (errno == EEXIST) {
-    return true;  // the path already existed.
+    return true; // the path already existed.
   }
-  return false;  // unknown error.
+  return false; // unknown error.
 }
 
 std::ostream& operator<<(std::ostream& os, const File& file) {
   os << file.full_pathname();
   return os;
 }
+
+bool File::set_last_write_time(time_t last_write_time) {
+  struct utimbuf ut {};
+  ut.actime = ut.modtime = last_write_time;
+  return utime(full_path_name_.c_str(), &ut) != -1;
+}
+
+std::unique_ptr<wwiv::core::FileLock> File::lock(wwiv::core::FileLockType lock_type) {
+#ifdef _WIN32
+  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(handle_));
+  OVERLAPPED overlapped = {0};
+  DWORD dwLockType = 0;
+  if (lock_type == wwiv::core::FileLockType::write_lock) {
+    dwLockType = LOCKFILE_EXCLUSIVE_LOCK;
+  }
+  if (!::LockFileEx(h, dwLockType, 0, MAXDWORD, MAXDWORD, &overlapped)) {
+    LOG(ERROR) << "Error Locking file: " << full_path_name_;
+  }
+#else
+
+  // TODO: unlock here
+
+#endif // _WIN32
+  return std::make_unique<wwiv::core::FileLock>(handle_, full_path_name_, lock_type);
+}
+
+} // namespace core
+} // namespace wwiv

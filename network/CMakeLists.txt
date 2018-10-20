@@ -1,6 +1,4 @@
-# CMake for WWIV 5.0
-cmake_minimum_required (VERSION 2.6)
-project (NETWORK)
+# CMake for WWIV 5
 include_directories(..)
 
 set(NETWORK_MAIN network.cpp)

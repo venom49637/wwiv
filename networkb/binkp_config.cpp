@@ -1,15 +1,33 @@
+/**************************************************************************/
+/*                                                                        */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2015-2017, WWIV Software Services             */
+/*                                                                        */
+/*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
+/*    you may not use this  file  except in compliance with the License.  */
+/*    You may obtain a copy of the License at                             */
+/*                                                                        */
+/*                http://www.apache.org/licenses/LICENSE-2.0              */
+/*                                                                        */
+/*    Unless  required  by  applicable  law  or agreed to  in  writing,   */
+/*    software  distributed  under  the  License  is  distributed on an   */
+/*    "AS IS"  BASIS, WITHOUT  WARRANTIES  OR  CONDITIONS OF ANY  KIND,   */
+/*    either  express  or implied.  See  the  License for  the specific   */
+/*    language governing permissions and limitations under the License.   */
+/**************************************************************************/
 #include "networkb/binkp_config.h"
 
 #include <iostream>
-#include <memory>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 
-#include "core/strings.h"
-#include "core/inifile.h"
 #include "core/file.h"
-#include "core/textfile.h"
+#include "core/inifile.h"
+#include "core/strings.h"
+#include "sdk/fido/fido_address.h"
+#include "sdk/fido/fido_callout.h"
 #include "sdk/networks.h"
 
 using std::endl;
@@ -21,112 +39,128 @@ using std::vector;
 using wwiv::core::IniFile;
 using namespace wwiv::strings;
 using namespace wwiv::sdk;
+using namespace wwiv::sdk::fido;
 
 namespace wwiv {
 namespace net {
 
-// [[ VisibleForTesting ]]
-bool ParseBinkConfigLine(const string& line, uint16_t* node, BinkNodeConfig* config) {
-  // A line will be of the format @node host:port
-  if (line.empty() || line[0] != '@') {
-    // skip empty lines and those not starting with @.
-    return false;
-  }
-  
-  stringstream stream(line);
-  string node_str;
-  stream >> node_str;
-  *node = StringToUnsignedShort(node_str.substr(1));
-  string host_port_str;
-  stream >> host_port_str;
-  
-  string host = host_port_str;
-  uint16_t port = 24554;  // default port
-  if (host_port_str.find(':') != string::npos) {
-    vector<string> host_port = SplitString(host_port_str, ":");
-    host = host_port[0];
-    port = StringToUnsignedShort(host_port[1]);
-  }
-  
-  config->host = host;
-  config->port = port;
-
-  return true;
-}
-
-static bool ParseAddressesFile(std::map<uint16_t, BinkNodeConfig>* node_config_map, const string network_dir) {
-  TextFile node_config_file(network_dir, "binkp.net", "rt");
-  if (node_config_file.IsOpen()) {
-    // Only load the configuration file if it exists.
-    string line;
-    while (node_config_file.ReadLine(&line)) {
-      uint16_t node_number;
-      BinkNodeConfig node_config;
-      if (ParseBinkConfigLine(line, &node_number, &node_config)) {
-        // Parsed a line correctly.
-        node_config_map->emplace(node_number, node_config);
-      }
-    }
-  }
-  return true;
-}
-
-BinkConfig::BinkConfig(const std::string& callout_network_name, const Config& config, const Networks& networks)
-    : callout_network_name_(callout_network_name), networks_(networks) {
+BinkConfig::BinkConfig(const std::string& callout_network_name, const Config& config,
+                       const Networks& networks)
+    : config_(config), callout_network_name_(callout_network_name), networks_(networks) {
   // network names will alwyas be compared lower case.
   StringLowerCase(&callout_network_name_);
-  system_name_ = config.config()->systemname;
+  system_name_ = config.system_name();
   if (system_name_.empty()) {
     system_name_ = "Unnamed WWIV BBS";
   }
-  sysop_name_ = config.config()->sysopname;
+  sysop_name_ = config.sysop_name();
   if (sysop_name_.empty()) {
     sysop_name_ = "Unknown WWIV SysOp";
   }
+  gfiles_directory_ = config.gfilesdir();
 
   if (networks.contains(callout_network_name)) {
     const net_networks_rec& net = networks[callout_network_name];
-    callout_node_ = net.sysnum;
-    if (callout_node_ == 0) {
-      throw config_error(StringPrintf("NODE not specified for network: '%s'", callout_network_name.c_str()));
+    if (net.type == network_type_t::wwivnet) {
+      callout_wwivnet_node_ = net.sysnum;
+      if (callout_wwivnet_node_ == 0) {
+        throw config_error(
+            StringPrintf("NODE not specified for network: '%s'", callout_network_name.c_str()));
+      }
+      binkp_.reset(new Binkp(net.dir));
+    } else if (net.type == network_type_t::ftn) {
+      callout_fido_node_ = net.fido.fido_address;
+      if (callout_fido_node_.empty()) {
+        throw config_error(
+            StringPrintf("NODE not specified for network: '%s'", callout_network_name.c_str()));
+      }
+    } else {
+      throw config_error("BinkP is not supported for this network type.");
     }
-
-    ParseAddressesFile(&node_config_, net.dir);
+    // TODO(rushfan): This needs to be a shim binkp that reads from the nodelist
+    // or overrides.
+    binkp_.reset(new Binkp(net.dir));
   }
 }
 
+const net_networks_rec& BinkConfig::network(const std::string& network_name) const {
+  return networks_[network_name];
+}
+
+const net_networks_rec& BinkConfig::callout_network() const {
+  return network(callout_network_name_);
+}
+
 const std::string BinkConfig::network_dir(const std::string& network_name) const {
-  return networks_[network_name].dir;
+  return network(network_name).dir;
 }
 
 static net_networks_rec test_net(const string& network_dir) {
   net_networks_rec net;
   net.sysnum = 1;
   strcpy(net.name, "wwivnet");
-  net.type = net_type_wwivnet;
-  strcpy(net.dir, network_dir.c_str());
+  net.type = network_type_t::wwivnet;
+  net.dir = network_dir;
   return net;
 }
 
 // For testing
-BinkConfig::BinkConfig(int callout_node_number, const wwiv::sdk::Config& config, const string& network_dir)
-  : callout_network_name_("wwivnet"), callout_node_(callout_node_number), 
-    networks_({ test_net(network_dir) }) {
-  ParseAddressesFile(&node_config_, network_dir);
-  system_name_ = config.config()->systemname;
-  sysop_name_ = config.config()->sysopname;
+BinkConfig::BinkConfig(int callout_node_number, const wwiv::sdk::Config& config,
+                       const string& network_dir)
+    : config_(config), callout_network_name_("wwivnet"), callout_wwivnet_node_(callout_node_number),
+      networks_({test_net(network_dir)}) {
+  binkp_.reset(new Binkp(network_dir));
+  system_name_ = config.system_name();
+  sysop_name_ = config.sysop_name();
+  gfiles_directory_ = config.gfilesdir();
 }
 
 BinkConfig::~BinkConfig() {}
 
-const BinkNodeConfig* BinkConfig::node_config_for(int node) const {
-  auto iter = node_config_.find(node);
-  if (iter != end(node_config_)) {
-    return &iter->second;
+const binkp_session_config_t* BinkConfig::binkp_session_config_for(const std::string& node) const {
+  static binkp_session_config_t static_session{};
+
+  if (callout_network().type == network_type_t::wwivnet) {
+    if (!binkp_) {
+      return nullptr;
+    }
+    return binkp_->binkp_session_config_for(node);
+  } else if (callout_network().type == network_type_t::ftn) {
+    try {
+      FidoAddress address(node);
+      FidoCallout fc(config_, callout_network());
+      if (!fc.IsInitialized())
+        return nullptr;
+      auto fido_node = fc.fido_node_config_for(address);
+
+      if (fido_node.binkp_config.host.empty()) {
+        // We must have a host at least, otherwise we know this
+        // is a completely empty record and we must return nullptr
+        // since the node config is not found.
+        return nullptr;
+      }
+
+      static_session = fido_node.binkp_config;
+      if (static_session.port == 0) {
+        // Set to default port.
+        static_session.port = 24554;
+      }
+
+      if (static_session.port == 0 && static_session.host.empty()) {
+        return nullptr;
+      }
+
+      return &static_session;
+    } catch (const std::exception&) {
+      return nullptr;
+    }
   }
   return nullptr;
 }
 
-}  // namespace net
-}  // namespace wwiv
+const binkp_session_config_t* BinkConfig::binkp_session_config_for(uint16_t node) const {
+  return binkp_session_config_for(std::to_string(node));
+}
 
+} // namespace net
+} // namespace wwiv

@@ -19,9 +19,6 @@
     <ClCompile Include="bbs.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="bbslist.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="bbsovl1.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -46,9 +43,6 @@
     <ClCompile Include="bputch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="callback.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="chains.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -56,9 +50,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="chnedit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="colors.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="com.cpp">
@@ -94,9 +85,6 @@
     <ClCompile Include="dropfile.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="dupphone.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="events.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -115,9 +103,6 @@
     <ClCompile Include="gfiles.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="gfledit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="hop.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -133,9 +118,6 @@
     <ClCompile Include="instmsg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform\win32\InternalTelnetServer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="interpret.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -148,13 +130,7 @@
     <ClCompile Include="lpfunc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="memory.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="menu.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="menuedit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="menuinterpretcommand.cpp">
@@ -167,9 +143,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="misccmd.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="msgbase.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="msgbase1.cpp">
@@ -223,9 +196,6 @@
     <ClCompile Include="showfiles.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="SmallRecord.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="sr.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -233,9 +203,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="srsend.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="status.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="stuffin.cpp">
@@ -253,9 +220,6 @@
     <ClCompile Include="subreq.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="subxtr.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="syschat.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -271,9 +235,6 @@
     <ClCompile Include="uedit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="user.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="platform\win32\utility2.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -286,28 +247,10 @@
     <ClCompile Include="voteedit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="WComm.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="wfc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="platform\win32\wiot.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="WOutStream.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="WOutStreamBuffer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="wqscn.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="WSession.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="WUser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="xfer.cpp">
@@ -352,9 +295,6 @@
     <ClCompile Include="menu_parser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="capture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="local_io_win32.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -364,7 +304,58 @@
     <ClCompile Include="local_io_curses.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="wfc_log.cpp">
+    <ClCompile Include="arword.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="read_message.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="message_file.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="email.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ssh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="remote_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="remote_socket_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="null_local_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="stdio_local_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="mmkey.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="output.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="trashcan.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="application.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="full_screen.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="basic.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\my_basic\core\my_basic.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="gfileedit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -379,9 +370,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="datetime.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="fcns.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="filenames.h">
@@ -405,9 +393,6 @@
     <ClInclude Include="menusupp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="net.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="pause.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -426,13 +411,7 @@
     <ClInclude Include="subxtr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="vardec.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="vars.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="wcomm.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="wconstants.h">
@@ -444,37 +423,16 @@
     <ClInclude Include="sysoplog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="platform\win32\wiot.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="woutstreambuffer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="xinitini.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="utility.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="wsession.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="wstatus.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="wwiv.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="wwivassert.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="wwivcolors.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="wuser.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="platform\wutil.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="prot\xmodem.h">
@@ -534,16 +492,7 @@
     <ClInclude Include="automsg.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="bbslist.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="callback.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="menu_parser.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="capture.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="local_io_win32.h">
@@ -555,9 +504,6 @@
     <ClInclude Include="null_local_io.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="wfc_log.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="bbsutl.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -565,9 +511,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="bgetch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bputch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="com.h">
@@ -579,16 +522,214 @@
     <ClInclude Include="interpret.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="msgbase.h" />
     <ClInclude Include="connect1.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="quote.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="uedit.h" />
-    <ClInclude Include="shortmsg.h" />
     <ClInclude Include="confutil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="wwiv_windows.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="archivers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bbsovl3.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="chat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="local_io_curses.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="multinst.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="netsup.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="newuser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stuffin.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="xfer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="batch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bbsovl1.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bbsovl2.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="chains.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="chnedit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="arword.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="subacc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="read_message.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="message_file.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bbsutl2.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shortmsg.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="uedit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="email.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="msgbase1.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="defaults.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="events.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="extract.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ssh.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="remote_io.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="remote_socket_io.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="null_remote_io.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stdio_local_io.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="inetmsg.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="srsend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="mmkey.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="xferovl1.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="output.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="trashcan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="diredit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dirlist.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="execexternal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="finduser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="gfileedit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="gfiles.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="hop.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lilo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="local_io_unix_console.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lpfunc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="misccmd.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="xferovl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="application.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="full_screen.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="msgscan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="exceptions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="showfiles.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="srrcv.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="subedit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sublist.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="syschat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="wqscn.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="xfertmp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="multmail.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="readmail.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="subreq.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="basic.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -599,5 +740,8 @@
     <Filter Include="Source Files">
       <UniqueIdentifier>{1b7782d2-8144-4eac-9827-75236a5a49b8}</UniqueIdentifier>
     </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="todo.txt" />
   </ItemGroup>
 </Project>

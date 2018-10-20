@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -120,11 +120,11 @@ static UNS_32_BITS crc_32_tab[] = {
 
 unsigned short crc;
 
-unsigned long int crc32buf(const char *pBuffer, std::size_t nLength) {
+unsigned long int crc32buf(const char *buffer, std::size_t nLength) {
   unsigned long int oldcrc32;
   oldcrc32 = 0xFFFFFFFF;
-  for (; nLength; --nLength, ++pBuffer) {
-    oldcrc32 = UPDC32(*pBuffer, oldcrc32);
+  for (; nLength; --nLength, ++buffer) {
+    oldcrc32 = UPDC32(*buffer, oldcrc32);
   }
   return ~oldcrc32;
 }

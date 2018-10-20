@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -25,37 +25,80 @@
 
 #include "core/file.h"
 #include "core/strings.h"
+#include "core/version.h"
 #include "core/wwivport.h"
 #include "core_test/file_helper.h"
 
 #include "gtest/gtest.h"
+#include "core/datetime.h"
 #include "sdk/filenames.h"
 #include "sdk/vardec.h"
 
 using namespace std;
+using namespace wwiv::core;
 using namespace wwiv::strings;
 
+static statusrec_t create_status() {
+  statusrec_t s = {};
+  memset(&s, 0, sizeof(statusrec_t));
+  const string now(time_t_to_mmddyy(time_t_now()));
+  to_char_array(s.date1, now);
+  strcpy(s.date2, "00/00/00");
+  strcpy(s.date3, "00/00/00");
+  strcpy(s.log1, "000000.log");
+  strcpy(s.log2, "000000.log");
+  to_char_array(s.gfiledate, now);
+  s.callernum = 65535;
+  s.qscanptr = 2;
+  s.net_bias = 0.001f;
+  s.net_req_free = 3.0;
+  return s;
+}
 
 SdkHelper::SdkHelper() : saved_dir_(File::current_directory()), root_(files_.CreateTempFilePath("bbs")) {
-  const string msgs = CreatePath("msgs");
-  const string gfiles = CreatePath("gfiles");
-  const string menus = CreatePath("menus");
   data_ = CreatePath("data");
-  const string dloads = CreatePath("dloads");
+  msgs_ = CreatePath("msgs");
+  gfiles_ = CreatePath("gfiles");
+  menus_ = CreatePath("menus");
+  scripts_ = CreatePath("scripts");
+  dloads_ = CreatePath("dloads");
 
-  configrec c;
-  strcpy(c.msgsdir, msgs.c_str());
-  strcpy(c.gfilesdir, gfiles.c_str());
-  strcpy(c.menudir, menus.c_str());
-  strcpy(c.datadir, data_.c_str());
-  strcpy(c.dloadsdir, dloads.c_str());
+  {
+    configrec c = {};
+    to_char_array(c.msgsdir, "msgs");
+    to_char_array(c.gfilesdir, "gfiles");
+    to_char_array(c.menudir, "menus");
+    to_char_array(c.datadir, "data");
+    to_char_array(c.dloadsdir, "dloads");
 
-  File cfile(root_, CONFIG_DAT);
-  if (!cfile.Open(File::modeBinary|File::modeCreateFile|File::modeWriteOnly)) {
-    throw "failed to create config.dat";
+    // Add header version.
+    // TODO(rushfan): This really should all be done in the Config class and also used
+    // by wwivconfig from there.
+    configrec_header_t h = {};
+    h.config_revision_number = 0;
+    h.config_size = sizeof(configrec);
+    c.userreclen = sizeof(userrec);
+    h.written_by_wwiv_num_version = wwiv_num_version;
+    to_char_array(h.signature, "WWIV");
+    c.header.header = h;
+
+    File cfile(FilePath(root_, CONFIG_DAT));
+    if (!cfile.Open(File::modeBinary|File::modeCreateFile|File::modeWriteOnly)) {
+      throw std::runtime_error("failed to create config.dat");
+    }
+    cfile.Write(&c, sizeof(configrec));
+    cfile.Close();
   }
-  cfile.Write(&c, sizeof(configrec));
-  cfile.Close();
+
+  {
+    File sfile(FilePath(data_, STATUS_DAT));
+    if (!sfile.Open(File::modeBinary | File::modeCreateFile | File::modeWriteOnly)) {
+      throw std::runtime_error("failed to create status.dat");
+    }
+    statusrec_t s = create_status();
+    sfile.Write(&s, sizeof(statusrec_t));
+    sfile.Close();
+  }
 }
 
 std::string SdkHelper::CreatePath(const string& name) {

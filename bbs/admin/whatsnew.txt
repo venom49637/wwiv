@@ -1,10 +1,445 @@
 ==============================================================================
-                           WWIV 5.0 What's New List
-                 Copyright 1999-2014 WWIV Software Services
+                           WWIV BBS What's New List
+                 Copyright 1999-2018 WWIV Software Services
 ==============================================================================
+Legend (starting with 5.3)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+! Breaking change (you may need to do something)
++ New feature
+- Feature removed
+* Change or cleanup
 
-What's New in 2014
-~~~~~~~~~~~~~~~~~~
+What's New in WWIV 5.4 (2018)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+! windows-wwiv-update has been removed from the distribution.  Had lots
+  of complaints of it not working for people, and may reappear in the
+  future as a native C++ implementation.
+  It's source has been moved it it's own repo.
+! wwivserver.exe has been removed from the distribution.  wwivd is
+  the replacement. It's source has been moved it it's own repo.
+! WINS has been removed from the distribution. It hasn't changed in
+  several years and it's source has been moved it it's own repo.
+  If new changes are made, it'll get it's own downloadable build
+  for win32, or instructions for how to compile it yourself
+  will be created.
+* Lots of small changed related to logging, the user visible one is
+  that log files are not held open anymore, so you can rotate them
+  while a binary is running (like networkb or wwivd)
+! Removed the '#' modifer from callout.net. It didn't work and also
+  wasn't documented.
+* Fixed duplicate contact.net entries.
++ Added options --save and --backup to wwivutil net contact
+* Fixed networkc missed things to do, by adding a loop in networkc 
+  to catch everything to do.
+! remove INI variable RATIO. It was duplicated in wwivconfig and confusing.
+* Fixes the dialog to create sysop account
+* Fix error logged about failure to write 5.x header
++ Added wwivutil net subscribers command.
+* Fixed a bunch of networking issues. (gating and hosting related)
++ added wwivutil fido subscribers command
+* Improved FTN duplicate checking to check for either the 
+  MSGID (if available) or a hash of the message header.
+  Either one will now trigger a dupe, vs needing both to
+  mark a message as a dupe.  This should improve the case
+  where the header is changed on a message and it is resent
+  to us.
+* Only use fake mailer mode on telnet connections (not SSH)
+  since that breaks SSH/
+* Fixed a problem where we couldn't mark a wwivnet call as
+  a failure (we threw an exception vs. recoring it in contact.net)
+* Fixed STDIO based editors not working in Linux, and added an
+  option to wwivconfig to enable it (the option is visible for
+  all platforms, but currently only works on Linux/Unix)
+* The Message SDK now honors pending_net_val flag on subboards.
+! Fixed hubbing and gating in the network stack this should now
+  mostly work as expected.
+* Remove existing msgid line before adding a new one (bug #1134)
+* Improvements on detecting a failed session in networkb.
++ wwivconfig can now edit callout.net from the networks menu
+  just like it can edit fido_callouts.json with a GUI editor.
+! You can now send a FTN email using the form:
+  "username (net/node)" or "username (zone:net/node)".  Using
+  the fake ftn node number is no longer needed.
+! Added --skip_delete to most network commands, it'll backup vs
+  deleting packets that it's processed.
+* wwivutil messages dump now displays msgid for messages
++ net.ini is now read for default values for most command
+  line flags for all network? commands.  I.e. you can add
+  skip_net = true under [networkb] and it'll be the same
+  as added --skip_net=true on the commandline
++ wwivd now handles all of the callouts instead of bbs's
+  WFC screen.  Make sure you turn it on in wwivconfig
+  to allow it to happen, then the nodes that allow 
+  auto-callouts will be called out to on schedule as
+  set in callout.net or fido_callout.json (both are
+  editable in wwivconfig in the network settings).
+* Don't silently crash the binary when a network connection
+  gets dropped.  Handle SIGPIPE on linux and log the result.
+* networkb (and bbs) now uses networkc to "cleanup the net"
+  instead of each tool having a different buggy implementation.
+* Fixed the log file timestamp (was using . not ,)
+* net54's network1 now updates the bytes waiting in contact.net
+  like net3x did (and it should have been doing all along)
+* wwivd will reload the network callout configuration when
+  receiving a HUP signal.
++ wwivd can now execute wwiv's beginday event if specified
+  to do so in wwivconfig
++ added --quiet flag to wwivconfig to make it not output
+  anything unless it's doing something (nice to keep the
+  wfc from displaying lots of useless info)
+* wwivd now exit's cleanly so systemd is happier.
++ wwivd autoblocking now works (it was listed in wwivconfig
+  back in 5.3, but never enabled in wwivd, fixed that)
++ networkc now has a --process_instance=XX flag that's used
+  when the bbs uses it to cleanup the net.
+- Removed the '-k' flag from bbs, please use wwivutil to
+  pack the message bases now
++ added "wwivutil print" command to print ansi files using the same
+  ansi interpretation code in the bbs (also it's now been rewritten
+  into the SDK module so others can use it easily)
++ If an environment variable WWIV_DIR exists, use that
+  to locate config.dat unless --bbsdir is specified on
+  the commandline.  This works in every wwiv binary.
+* For linux we now have builds for debian9 and centos7.
++ code that inputs numbers is much nicer and validates
+  the number a bit more.
+* broke and fixed quoting, it's much simplier now and
+  understandable by humans.
++ ANSIs display reasonably well now in the fullscreen message viewer.
++ added wwivutil net list and wwivutil messages areas
+* Made and use new string functions for inputting numbers that only
+  allow numbers to be input, also can color the numbers red when out
+  of range.
++ Implement WWIV_LOGS_DIR and WWIV_BIN_DIR env vars
++ Setup the ability to specify an env var for any command
+  line parameter as the 4th argument to CommmandLineArgument, this
+  simplified the logic for checking the bbsdir value.
+* WWIV now uses the same commandline parsing code as the rest of the
+  binaries in the suite of tools (wwivutil, network, etc)
+* Add --configdir to all binaries
+* Add --bindir to all binaries
+* add --logdir to all binaries
+* Add --quiet to all network binaries
+* WWIV now needs CMake 3.9 and C++17 compatibility (this means 
+  gcc >=6.3.0 or MSVC 2017 on Win32)
+  For stretch add this line:
+    deb http://ftp.debian.org/debian stretch-backports main
+  to your sources.list (or add a new file with the ".list" extension to
+  /etc/apt/sources.list.d/)
+  You can also find a list of other mirrors at
+  https://www.debian.org/mirror/list
+
+  Then run the following to install cmake 3.9:
+    sudo apt update
+    sudo apt -t stretch-backports install cmake
+  On Centos: yum install cmake3
+  On Windows: It's already there with MSVC 2017
++ STDIO mode on Linux now creates a PTY in addition to setting the
+  handles of 0 and 1 to pipe to the socket.  Also the pty seems to
+  be setup properly with a Window size of 80 x 25.
+* /C is fixed (it was broken a few weeks ago)
+* QBBS Editors should now mostly work as expected, we strip the colors
+  out of the messages, and the header lines that go into QUOTES.TXT 
+  since only wwiv editors care about that metadata.
++ TextFile now supports a 'd' parameter for filemode, it means DOS
+  text (i.e use \r\n on Linux vs. \n on Linux).  All door drop files
+  and QBBS Editor Files (MSG{TMP,INF}) now use this mode.  This means
+  no more unix2dos needed on Linux.  Since these are only used by
+  DOSEMU based doors, it should be fine.
+
+What's New in WWIV 5.3 (2018)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Lots of fixes to the SDK messagebase code.
++ Created SDK class for handling qscan pointers
+! networkf will exit with error level 1 when there is
+  no work to do.
+* Optimize the full screen message title list by not redrawing
+  the whole screen when there is no change.
+* Lots of improvements in getting rid of global variables throughout
+  the BBS and especially around the message base code in WWIV
+* Lots of improvements to the localUI classes used by INIT, also
+  can now optionally have help for edit items displayed in the
+  statusbar and UI pages are easier to create.
+* Added UI for WWIVD.
+* Implemented all of the wwiv-server features (auto blocking,
+  country blocking, goodlist, badlist, etc) into wwivd except
+  for "fake mailer mode"
+* Dont try to use the Full-Screen Reader for emails, since 
+  it doesn't work yet.
+* For linux we now have builds for debian8, debian9 and centos7.
++ wwivd now offers fakemailer mode and is now has (mostly) feature parity
+  with wwivserver.exe on windows.  wwivserver.exe is deprecated
+  with the 5.3 release and will be removed for 5.4
+! INIT has been renamed to WWIVCONFIG.  Please delete init.exe or
+  ./init when you upgrade to 5.3
++ wwivutil dump will now display control characters (like [^A]
+  for control-A)
+* On FTN messages bank lines were being striped accidentally,
+  this is now fixed.
++ wwivconfig has some new parameters for how it works with 4.x
+  WWIV installs.  --4xx will launch a menu with only the items
+  that work with 4.x (like wwivd editor and network.json editor)
+  run "wwivconfig --help" for the latest list of command-line parameters.
+* Fixed internal editor word wrapping on linux.
+* fixed 8 char packet passwords truncating the last character.
+* Emails packed in PKT files will now import, previously only
+  ones in bundles (*.su?, *.mo?, etc) would import.
+! Fixed the oubound FTN gateway number (network3 thought it
+  was 32675 not 32765). This means you need to run network3
+  on all FTN node networks (i.e. if fsxnet is network .2 in init
+  then run "network3 .2" to rebuild the bbsdata.* files).
+! **!!*!*!*! You need to update the outbound sub by recreating the
+  network node it's under in subedit (J, then M, then the letter, usually
+  A, then retype the echo tag, or just edit data/subs.json and replace
+  32675 with 32765 everywhere prettymuch (it's under host section))
+
+What's New in WWIV 5.3 (2017)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++ WWIVbasic interpreter is available.  The menu command is
+  "RUNBASIC".  Also you can run a script from the logon event
+  by using @basic:[scriptname.bas] for the LOGON_CMD in wwiv.ini
+  (eventually many other commands will allow you to specify a
+  script to run instead of an external command).
++ New install.sh on Linux to do the entire installation.
+* Init no longer prompts for system password.
+* subs.json is now the source of truth for subs data (before, subs.dat
+  and subs.xtr were both used as source of truth, although subs.json has
+  been written on save since 5.2)
+- background color pipe code (the format is '|Bn' where n in [0,9]), which
+  were deprecated in 5.2 has been removed.
+- extended ^P codes > 9 are removed.
++ New experimental menu editor in INIT.
+* Most lists in INIT will now keep their selected index when returning
+  to the list.
++ Added wwivutil status command. 1st operation is 
+  "wwivutil status qscan [set|get]". You can set or get the qscan value
+  in status.dat.
+- Removed internal menueditor, use the one in init if needed.
+* Upgraded compilers to MSVC 2017 and GCC 6.2.
++ handling type main_type_sub_list is implemented now, so receiving
+  SUBS.LST from netup for WWIVnet type networks should work in net53.
+* FTN KLUDGE lines are now hidden for FTN networks.
+* Heart codes are stripped on outbound FTN messages now.
++ WWIV now compiles and runs on OpenIndiana (an Open Solaris fork)
+  Thanks to apam for the code!
+* Many FTN fixes. Also points may now work.
++ WWIVD now runs on Windows.  It has an initial version of a shuttle
+  or matrix logon support.
+- Removed internal usereditor, use the one in init if needed.
++ WWIVd now exports connection information to HTTP as a JSON object.
+  on the http port defined on init, URL: "/status"
+  Example output:
+    { "status": [ { "num_instances" : 3 }, { "used_instances": 0 } ] }
++ New option to set the working directory to the temp directory vs. 
+  bbs directory. It's available for both chains and editors.
++ Added %I when running commands to point to the path to the temporary
+  directory.
+* Fix some color schemes displaying black-on-black for colors
+* Fix compilation on GCC 4.9, also fix many warnings from clang-tidy
+! Use git submodules for dependencies instead of copyingn in code 
+  from another repository. This makes it easier to update to new
+  versions of our dependencies and also push fixes back.
+  You now need to update submodules when cloning unless you clone
+  it recursing submodules.
+* BinkP Fix (thanks apam) where all FTN addresses were not being presented
+  when answering.
+! CMake is now the source-of-truth build system on all platforms.
+  to build use "cmake --build . -- -j8" and not make or msbuild
+  anymore.
+! networkb will stay running now and doesn't need to be in a 
+  batch file or shells script to loop after each connection.
+  Also even better, let wwivd spawn it as needed vs. running
+  it manually.
+
+What's New in WWIV 5.2 (2016)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Added "WWIVUTIL FILES" subcommand to list files, file areas and also
+  delete a file entry from the listing.
+* Fixed "WWIVUTIL FIX" with file entries. It actually works again.
+* Login prompt looks a little snazzier, uses the colorized input prompt.
+* config.dat now includes version info on what wrote to it for better
+  versioning of upgrades.  The only change is now if you go back to 4.3
+  you will need to run init to reset your newuser password (if you have
+  one, or to clear it on downgrade since the newuserpw field and version
+  info in config.dat live in the same first 21 characters in the file.)
+* CONFUG.USR is no longer needed, INIT in 5.2.2129+ will move the data into
+  user.lst and delete the file.
+* Removed command line option -O, since -X{T,S} implies -O
+* Removed Control-F1 to shutdown the BBS, it's not needed anymore on
+  non-single user operating systems.
+* Removed TAB {Instance Editor, didn't really edit, just allowed you to see
+  status or shutdown an instance} command from WFC. Not really needed anymore.
+* BBS now uses the network support code from the SDK module (like net51).
+* nodemgr is deleted.  wwivd is the new preferred *nix daemon for spawning
+  instances.
+* bbs -XU is no longer supported.  valid connection types are local, ssh and
+  telnet on all platforms.
+* bbs -I# is no longer supported. It's been a duplicate of -N forever, please
+  use -N## to specify the node number. (It also hasn't worked for quite some
+  time)
+* installation now includes sample scripts for systemd.
+* wwivserver (windows), can now run networkb on demand for receiving connections
+  automatically. Make sure that you configure it on the binkp page. This won't
+  callout but will receive network binkp requests.
+* / callout menu displays host:port if it's a binkp connection.
+* callout.net flag /## now means ## minutes not ## hours
+* wwivutil net dump_xxx commands are now just called wwivutil net xxx
+  for example dump_callout -> callout
+* networkb now supports CRC verification when sending files. To disable it
+  set crc=N in the newly created net.ini
+* net.ini can now handle defaults on a per-network basis or
+  per-network-node basis (when calling out) using tags of 
+  [networkb-network_name] and [networkb-network_name-sendto_node].
+  The only settings are crc=[Y|N] and skip_net=[Y|N].
+* The short lived networkb.ini is renamed to net.ini (yes, this is the same
+  as the WINS one, but WINS will go away over time).
+* networkb will loop on receive, no need to run binkp.cmd, but
+  since wwivserver can answer binkp for you, no need to run networkb
+  manually to receive traffic.
+* wwivutil messages now has a pack comand to pack a message area.
+* Network names "Filenet" and "internet" no longer have special meaning,
+  within the BBS, please ensure those networks are of type "internet" for
+  WWIV to understand those are internet network types. (don't rename them
+  since WINS may care about the name).
+* networkf is now bundled with the binaries. It can import and export
+  message network types fido.
+* The fake FTN network address is now hard coded, and it is 32765.
+* Routing in FTN now works, uou need to define a route string for nodes
+  in the address list in INIT for the network.  The format is space
+  separated list of routes.  A route is a partial address ending in *
+  as a wildcard. Optionally starting with ! to be a negative match.
+  Example "11:* !11:2/*" would match everything in zone 11, except
+  for everything in net 11:2/*.
+* NETWORKC.EXE is added, it's like the Cerebrum software clnup.exe. It
+  will run network{1,2,3} as needed to process all mail. It'll also
+  run networkf to export packets to FTN bundles if any exist.
+* FTN NetMail now works (sometimes).
+* net.in has a new parameter for section [networkb].  cram_md5=[Y|N]. If set
+  to N, it'll disable cram-md5 and works on either end.  If either side
+  disables it, the session won't use it.
+* Fixed network1 from breaking DE1 packets
+* Fixed the cram-md5 implementation, it's not correct and can talk to 
+  other binkp servers (tested against MIS) using cram-md5.  This happened
+  in build 2304.
+* The new user flow on Linux now works as expected (the screen
+  positioning is not off).
+* New experimental full screen reader. Enable it with
+  "EXPERIMENTAL_READ_PROMPT = Y" in wwiv.ini.  Once enabled it's
+  a per-user option in Defaults.
+* New file "gfiles/mbfsed.msg" is the help screen for user
+  commands for the full screen message reader.
+* New file "gfiles/mbfsed-sysop.msg" is the help screen for sysop
+  commands for the full screen message reader.
+* New file "gfiles/title-fsed.msg" is the help screen for title
+  scan in hte full screen message reader.
+* readme.510 is now readme-wwiv.txt.
+* wwivini.510 is now wwivini.txt
+* Keyboard timeouts are now configurable in WWIV.INI.  Also
+  you can configure a different timeout value for connections
+  still at the logon phase, before a user is logged in. That
+  defaults to 30 second (vs. 10 minutes before)
+  The keys with defaults are are:
+    USER_KEY_TIMEOUT  = 180 ; Timeout in seconds for non-sysops.
+    SYSOP_KEY_TIMEOUT = 600 ; Timeout in seconds for sysops.
+    LOGON_KEY_TIMEOUT = 130 ; Timeout in second for users logging in 
+                            ; (i.e. They are at the NN: prompt.)
+* EXPERIMENTAL_READ_PROMPT is now FULL_SCREEN_READER and defaults
+  to being on.
+* New Subboard flag (P) to disable the full screen reader for a 
+  specific subboard. This is needed for ansi art subs.
+* USE_NEW_BBSLIST is removed from WWIV.INI. All BBS List is the
+  new JSON format.
+* fcns.h is finally gone.
+
+What's New in WWIV 5.1 (2016)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* removed "debug_level" and Debug menu command. use VLOG(2) now.
+* "extra color" was only used in transfer section w/o listplus 
+  (which means it's not ever used). removed the checks for it.  This
+  will come back in the future somewhere else to be useful.
+* Added IP blacklisting/whitelisting and auto blocking. The settings
+  are on the blacklist page in wwivserver.exe. By default 3 connection
+  attempts in 120 seconds will get an IP blacklisted.
+* The wwiv server also pretends to be a FTN mailer for fun.
+* Removed F6 (toggle sysop alert), to page you after a session ends, since
+  this isn't needed post-DOS anymore.
+* Added wwiv-update.exe (contributed to WWIV by TRI0N from 
+  https://github.com/TRI0N/Windows-WWIV-Update/) into nightly builds.  
+  wwiv-update.exe is the name of the new binary.
+* SSH support. Use -XS as the commandline argumetn vs. -XT for telnet.
+* networkb will use CRAM-MD5 for authentication by default if both
+  systems support it.
+* The wwiv.ini setting TERMINAL_CMD will be used to launch a terminal
+  program from the WFC using the 'T' command (again).
+* WWIV5TelnetServer has a log viewer built in you may use to see the
+  state of the various WWIV and network log files.
+* net.log is now written in normal order for log files with the newest
+  entry at the bottom and never truncated to behave like the rest of 
+  the log files in WWIV.
+* The two laston lists in WWIV have been merged into one.  Now last few
+  callers will always display the last few callers regardless of the 
+  day they called.
+* Added -XU command line type for UNIX communication type. On UNIX we
+  temporarily use that type by default for now.
+* UNIX Local IO is now curses based. Win32 can optionally use curses
+  for local IO by defining WWIV_WIN32_CURSES_IO.
+* Removed "-w" argument to BBS since there is now just 1 WFC (again).
+* Removed the --network=[net name] option from networkb.exe, now please
+  use --network_number=N (where N is like you would use with network1 .N)
+* Created alpha-quality network{1,2,3} replacements.  Please feel free to
+  try them out. They will eventually become net51 and replace the DOS based
+  net38.
+* Renamed WWIV5TelnetServer to WWIVServer, since it also does SSH too.
+* Numeric subtypes are no longer used.  Here's the diff of the change
+  in case you run an older WWIV and want to mod it to behave the same
+  way (using a string version for numeric types).  Otherwise just don't
+  use numeric named subs anymore.
+  https://github.com/wwivbbs/wwiv/pull/784/files
+*   
+
+What's New in WWIV 5.1 (2015)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Message titles are now limited to 72 characters (same as FidoNet message)
+  limits.  In reality they would get truncated around this length anyway and
+  in most places WWIV still forces a max of 60 characters.
+* Internal application-level caching for posts have been removed. It didn't help
+  access times anymore and added lots of unneeded complexity.
+* Started new utility WWIVUTIL which will eventually handle maintenance
+  tasks for the bbs.
+* Updated menus/textfiles to reflect 5.1 and also remove commands that have
+  been removed years ago.
+* LOCAL_SYSOP has been removed from wwiv.ini, it's always true now.
+* Callback support has been removed the rest of the way.
+* Threaded messages support has been removed (it didn't work anyway).
+* NETUTIL has been merged into WWIVUTIL.  Going forward, WWIVUTIL will be
+  the main external command line tool for WWIV on all platforms.
+* Removed menu commands DownloadPosts and DownloadFileList and the 
+  Download Zipped Text menu item from //QWK (all did the same thing).
+* Removed ability to run WWIVMAIL.EXE from the //QWK menu. If anyone
+  wants this, then can add their own //QWK menu now that we have a
+  menu editor since 4.3. This removed USE_WWIVMAIL and USE_INTERNAL_QWK
+  from wwiv.ini.
+* removed SLASH_SZ from wwiv.ini. It wasn't enabled by default anyway.
+* Removed ReadMessages menu item. It wasn't classic WWIV
+
+What's New in 2015 (WWIV 5.0)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* networkb - BINKP transport for WWIV networking is now part of the WWIV builds.
+* netutil - Network packet and config file utility now included
+* network - shim to proxy between network0, networkp (PPP project) and networkb
+  is now part of the product.
+* A SSM will be sent to the sysop when a new user joins the bbs.
+* WWIV moved from wwiv.sf.net to wwivbbs.org
+* Source code moved from sourceforge.net to GitHub.
+* Upgraded compilers from MSVC 2013 to 2015 Community.
+* Upgraded .NET from 4.0 to 4.6
+* Fixed hangs with guest user accounts when they drop connection
+* Made all QWK filenames lowercase
+* zip/unzip now bundled with WWIV on Windows
+* linux builds now just include linux files, ditto for windows
+
+What's New in 2014 (WWIV 5.0)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 * Many more things work.
 * Init is open sourced
 * Full self-bootstrapping support. No longer need 4.30 installed first.
@@ -50,8 +485,8 @@ What's New in 2014
   EXEC_CHILDWAITTIME  should be used to set how long to wait for exec'ed
   processes to become runnable. It defaults to 500ms.
 
-What's New in Beta-2
-~~~~~~~~~~~~~~~~~~~~~
+What's New in 5.0 Beta-2 (2004)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 * Archver commands now work.
 * F1 User Editor Improvements
 * PuTTY now works with auto-detect line mode
@@ -64,9 +499,8 @@ What's New in Beta-2
 * 2004 Copyright
 * Misc internal code cleanups.
 
-
-What's New in Beta-1
-~~~~~~~~~~~~~~~~~~~~
+What's New in 5.0 Beta-1
+~~~~~~~~~~~~~~~~~~~~~~~~
 * File compatable with 4.30/4.31
 * 32-bit Win32 version.
 * Compiles and Runs on Linux.

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015,WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -22,7 +22,7 @@
 #include "core/strings.h"
 #include "core/wwivassert.h"
 
-bool WFindFile::open(const std::string& file_spec, unsigned int nTypeMask) {
+bool WFindFile::open(const std::string& file_spec, WFindFileTypeMask nTypeMask) {
   __open(file_spec, nTypeMask);
 
   hFind = FindFirstFile(file_spec.c_str(), &ffdata);
@@ -35,7 +35,7 @@ bool WFindFile::open(const std::string& file_spec, unsigned int nTypeMask) {
   } else {
     filename_ = ffdata.cAlternateFileName;
   }
-  lFileSize = (ffdata.nFileSizeHigh * MAXDWORD) + ffdata.nFileSizeLow;
+  file_size_ = (ffdata.nFileSizeHigh * MAXDWORD) + ffdata.nFileSizeLow;
   return true;
 }
 
@@ -52,7 +52,7 @@ bool WFindFile::next() {
   } else {
     filename_ = ffdata.cAlternateFileName;
   }
-  lFileSize = (ffdata.nFileSizeHigh * MAXDWORD) + ffdata.nFileSizeLow;
+  file_size_ = (ffdata.nFileSizeHigh * MAXDWORD) + ffdata.nFileSizeLow;
   return true;
 }
 

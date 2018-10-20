@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,156 +19,48 @@
 #include <algorithm>
 #include <cmath>
 
+#include "bbs/bbsutl.h"
+#include "bbs/bbsovl3.h"
 #include "bbs/datetime.h"
-#include "bbs/wwiv.h"
-#include "bbs/wcomm.h"
-#include "bbs/wconstants.h"
+#include "bbs/exceptions.h"
+#include "local_io/keycodes.h"
+#include "bbs/pause.h"
+#include "bbs/remote_io.h"
+#include "local_io/wconstants.h"
+#include "bbs/bbs.h"
+#include "bbs/com.h"
+#include "bbs/sysoplog.h"
+#include "bbs/utility.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
-#include "bbs/keycodes.h"
+
+using namespace wwiv::sdk;
+using namespace wwiv::stl;
+using namespace wwiv::strings;
 
 extern char str_quit[];
 
-void RestoreCurrentLine(const char *cl, const char *atr, const char *xl, const char *cc) {
-  if (session()->localIO()->WhereX()) {
-    bout.nl();
-  }
-  for (int i = 0; cl[i] != 0; i++) {
-    bout.SystemColor(atr[i]);
-    bputch(cl[i], true);
-  }
-  FlushOutComChBuffer();
-  bout.SystemColor(*cc);
-  strcpy(endofline, xl);
-}
-
-void dump() {
-  if (ok_modem_stuff) {
-    session()->remoteIO()->purgeIn();
-  }
-}
 
 // This function checks to see if the user logged on to the com port has
 // hung up.  Obviously, if no user is logged on remotely, this does nothing.
-// returns the value of hangup
+// returns the value of a()->hangup_
 bool CheckForHangup() {
-  if (!hangup && session()->using_modem && !session()->remoteIO()->carrier()) {
-    hangup = true;
-    if (session()->IsUserOnline()) {
-      sysoplog("Hung Up.");
-      std::cerr << "Hung Up!";
+  if (!a()->hangup_ && a()->using_modem && !a()->remoteIO()->connected()) {
+    if (a()->IsUserOnline()) {
+      sysoplog() << "Hung Up.";
     }
+    Hangup();
   }
-  return hangup;
+  return a()->hangup_;
 }
 
-static void addto(char *pszAnsiString, int nNumber) {
-  char szBuffer[ 20 ];
-
-  strcat(pszAnsiString, (pszAnsiString[0]) ? ";" : "\x1b[");
-  snprintf(szBuffer, sizeof(szBuffer), "%d", nNumber);
-  strcat(pszAnsiString, szBuffer);
+void Hangup() {
+  if (a()->hangup_) { return; }
+  a()->hangup_ = true;
+  VLOG(1) << "Invoked Hangup()";
+  throw wwiv::bbs::hangup_error(a()->user()->GetName());
 }
-
-/* Passed to this function is a one-byte attribute as defined for IBM type
-* screens.  Returned is a string which, when printed, will change the
-* display to the color desired, from the current function.
-*/
-void makeansi(int attr, char *pszOutBuffer, bool forceit) {
-  static const char *temp = "04261537";
-
-  int catr = curatr;
-  pszOutBuffer[0] = '\0';
-  if (attr != catr) {
-    if ((catr & 0x88) ^ (attr & 0x88)) {
-      addto(pszOutBuffer, 0);
-      addto(pszOutBuffer, 30 + temp[attr & 0x07] - '0');
-      addto(pszOutBuffer, 40 + temp[(attr & 0x70) >> 4] - '0');
-      catr = (attr & 0x77);
-    }
-    if ((catr & 0x07) != (attr & 0x07)) {
-      addto(pszOutBuffer, 30 + temp[attr & 0x07] - '0');
-    }
-    if ((catr & 0x70) != (attr & 0x70)) {
-      addto(pszOutBuffer, 40 + temp[(attr & 0x70) >> 4] - '0');
-    }
-    if ((catr & 0x08) ^ (attr & 0x08)) {
-      addto(pszOutBuffer, 1);
-    }
-    if ((catr & 0x80) ^ (attr & 0x80)) {
-      if (checkcomp("Mac")) {
-        // This is the code for Mac's underline
-        // They don't have Blinking or Italics
-        addto(pszOutBuffer, 4);
-      } else if (checkcomp("Ami")) {
-        // Some Amiga terminals use 3 instead of
-        // 5 for italics.  Using both won't hurt
-        addto(pszOutBuffer, 3);
-      }
-      // anything, only italics will be generated
-      addto(pszOutBuffer, 5);
-    }
-  }
-  if (pszOutBuffer[0]) {
-    strcat(pszOutBuffer, "m");
-  }
-  if (!okansi() && !forceit) {
-    pszOutBuffer[0] = '\0';
-  }
-}
-
-void resetnsp() {
-  if (nsp == 1 && !(session()->user()->HasPause())) {
-    session()->user()->ToggleStatusFlag(WUser::pauseOnPage);
-  }
-  nsp = 0;
-}
-
-/* This function returns one character from either the local keyboard or
-* remote com port (if applicable).  After 1.5 minutes of inactivity, a
-* beep is sounded.  After 3 minutes of inactivity, the user is hung up.
-*/
-char getkey() {
-  resetnsp();
-  bool beepyet = false;
-  timelastchar1 = timer1();
-
-  using namespace wwiv::strings;
-  long tv = (so() || IsEqualsIgnoreCase(session()->GetCurrentSpeed().c_str(), "TELNET")) ? 10920L : 3276L;
-  long tv1 = tv - 1092L;     // change 4.31 Build3
-
-  if (!session()->tagging || session()->user()->IsUseNoTagging()) {
-    lines_listed = 0;
-  }
-
-  char ch = 0;
-  do {
-    while (!bkbhit() && !hangup) {
-      giveup_timeslice();
-      long dd = timer1();
-      if (dd < timelastchar1 && ((dd + 1000) > timelastchar1)) {
-        timelastchar1 = dd;
-      }
-      if (abs(dd - timelastchar1) > 65536L) {
-        timelastchar1 -= static_cast<int>(floor(SECONDS_PER_DAY * 18.2));
-      }
-      if ((dd - timelastchar1) > tv1 && !beepyet) {
-        beepyet = true;
-        bputch(CG);
-      }
-      application()->UpdateShutDownStatus();
-      if (abs(dd - timelastchar1) > tv) {
-        bout.nl();
-        bout << "Call back later when you are there.\r\n";
-        hangup = true;
-      }
-      CheckForHangup();
-    }
-    ch = bgetch();
-  } while (!ch && !hangup);
-  return ch;
-}
-
 
 static void print_yn(bool yes) {
   bout << YesNoString(yes);
@@ -183,7 +75,7 @@ bool yesno() {
   char ch = 0;
 
   bout.Color(1);
-  while ((!hangup) && ((ch = wwiv::UpperCase<char>(getkey())) != *(YesNoString(true))) && (ch != *(YesNoString(false)))
+  while ((!a()->hangup_) && ((ch = to_upper_case<char>(bout.getkey())) != *(YesNoString(true))) && (ch != *(YesNoString(false)))
          && (ch != RETURN))
     ;
 
@@ -202,7 +94,7 @@ bool noyes() {
   char ch = 0;
 
   bout.Color(1);
-  while ((!hangup) && ((ch = wwiv::UpperCase<char>(getkey())) != *(YesNoString(true))) && (ch != *(YesNoString(false)))
+  while ((!a()->hangup_) && ((ch = to_upper_case<char>(bout.getkey())) != *(YesNoString(true))) && (ch != *(YesNoString(false)))
          && (ch != RETURN))
     ;
 
@@ -211,17 +103,17 @@ bool noyes() {
   } else {
     print_yn(true);
   }
-  return (ch == *(YesNoString(true)) || ch == RETURN) ? true : false;
+  return ch == *(YesNoString(true)) || ch == RETURN;
 }
 
 char ynq() {
   char ch = 0;
 
   bout.Color(1);
-  while (!hangup &&
-         (ch = wwiv::UpperCase<char>(getkey())) != *(YesNoString(true)) &&
+  while (!a()->hangup_ &&
+         (ch = to_upper_case<char>(bout.getkey())) != *(YesNoString(true)) &&
          ch != *(YesNoString(false)) &&
-         (ch != *str_quit) && (ch != RETURN)) {
+         ch != *str_quit && ch != RETURN) {
     // NOP
     ;
   }
@@ -239,11 +131,24 @@ char ynq() {
   return ch;
 }
 
-char onek(const char *pszAllowableChars, bool bAutoMpl) {
-  if (bAutoMpl) {
+char onek(const std::string& allowable, bool auto_mpl) {
+  if (auto_mpl) {
     bout.mpl(1);
   }
-  char ch = onek_ncr(pszAllowableChars);
+  char ch = onek_ncr(allowable);
   bout.nl();
   return ch;
+}
+
+// Like onek but does not put cursor down a line
+// One key, no carriage return
+char onek_ncr(const std::string& allowable) {
+  while (true) {
+    CheckForHangup();
+    auto ch = to_upper_case(bout.getkey());
+    if (contains(allowable, ch)) {
+      return ch;
+    }
+  }
+  return 0;
 }

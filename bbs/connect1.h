@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -20,14 +20,9 @@
 
 #include "sdk/net.h"
 
-void zap_call_out_list();
-void read_call_out_list();
-void zap_bbs_list();
-void read_bbs_list_index();
 bool valid_system(int ts);
 net_system_list_rec *next_system(int ts);
-void zap_contacts();
-void read_contacts();
-void set_net_num(int nNetworkNumber);
+void set_net_num(int network_number);
+int32_t next_system_reg(int16_t ts);
 
 #endif  // __INCLUDED_BBS_CONNECT1_H__

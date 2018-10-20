@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,26 +16,28 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/confutil.h"
 
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/conf.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+#include "bbs/mmkey.h"
+#include "core/log.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
 
-// Local functions
-bool setconf(unsigned int nConferenceType, int which, int nOldSubNumber);
-bool access_conf(WUser * u, int sl, confrec * c);
-bool access_sub(WUser * u, int sl, subboardrec * s);
-bool access_dir(WUser * u, int sl, directoryrec * d);
-void addusub(usersubrec * ss1, int ns, int sub, char key);
-
+using namespace wwiv::sdk;
+using namespace wwiv::stl;
 
 /**
  * Does user u have access to the conference
  * @return bool
  */
-bool access_conf(WUser * u, int sl, confrec * c) {
-  WWIV_ASSERT(u);
-  WWIV_ASSERT(c);
+static bool access_conf(User * u, int sl, const confrec * c) {
+  CHECK(u != nullptr) << "access_conf called with null user";
+  CHECK(c != nullptr) << "access_conf called with null confrec";
 
   if (c->num < 1) {
     return false;
@@ -52,16 +54,18 @@ bool access_conf(WUser * u, int sl, confrec * c) {
     }
     break;
   }
-  if ((sl < c->minsl) || (sl > c->maxsl)) {
+  if (sl < c->minsl || (c->maxsl != 0 && sl > c->maxsl)) {
     return false;
   }
-  if ((u->GetDsl() < c->mindsl) || (u->GetDsl() > c->maxdsl)) {
+  const auto dsl = u->GetDsl();
+  if (dsl < c->mindsl || (c->maxdsl != 0 && dsl > c->maxdsl)) {
     return false;
   }
-  if ((u->GetAge() < c->minage) || (u->GetAge() > c->maxage)) {
+  const auto age = u->GetAge();
+  if (age < c->minage || (c->maxage != 0 && age > c->maxage)) {
     return false;
   }
-  if (incom && (modem_speed < c->minbps)) {
+  if (a()->context().incom() && a()->modem_speed_ < c->minbps) {
     return false;
   }
   if (c->ar && !u->HasArFlag(c->ar)) {
@@ -70,58 +74,50 @@ bool access_conf(WUser * u, int sl, confrec * c) {
   if (c->dar && !u->HasDarFlag(c->dar)) {
     return false;
   }
-  if ((c->status & conf_status_ansi) && (!u->HasAnsi())) {
+  if ((c->status & conf_status_ansi) && !u->HasAnsi()) {
     return false;
   }
-  if ((c->status & conf_status_wwivreg) && (u->GetWWIVRegNumber() < 1)) {
+  if ((c->status & conf_status_wwivreg) && u->GetWWIVRegNumber() < 1) {
     return false;
   }
-  if ((c->status & conf_status_offline) && (sl < 100)) {
-    return false;
-  }
-
-  return true;
-}
-
-
-bool access_sub(WUser * u, int sl, subboardrec * s) {
-  WWIV_ASSERT(u);
-  WWIV_ASSERT(s);
-
-  if (sl < s->readsl) {
-    return false;
-  }
-  if (u->GetAge() < (s->age & 0x7f)) {
-    return false;
-  }
-  if (s->ar != 0 && !u->HasArFlag(s->ar)) {
-    return false;
-  }
-  if ((s->anony & anony_ansi_only) && !u->HasAnsi()) {
+  if ((c->status & conf_status_offline) && sl < 100) {
     return false;
   }
 
   return true;
 }
 
+static bool access_sub(User& u, int sl, const subboard_t& s) {
+  if (sl < s.readsl) {
+    return false;
+  }
+  if (u.GetAge() < s.age) {
+    return false;
+  }
+  if (s.ar != 0 && !u.HasArFlag(s.ar)) {
+    return false;
+  }
+  if ((s.anony & anony_ansi_only) && !u.HasAnsi()) {
+    return false;
+  }
 
-bool access_dir(WUser * u, int sl, directoryrec * d) {
-  WWIV_ASSERT(u);
-  WWIV_ASSERT(d);
+  return true;
+}
 
-  if (u->GetDsl() < d->dsl) {
+static bool access_dir(User& u, int sl, directoryrec& d) {
+  if (u.GetDsl() < d.dsl) {
     return false;
   }
-  if (u->GetAge() < d->age) {
+  if (u.GetAge() < d.age) {
     return false;
   }
-  if (d->dar && !u->HasDarFlag(d->dar)) {
+  if (d.dar && !u.HasDarFlag(d.dar)) {
     return false;
   }
-  if ((d->mask & mask_offline) && u->GetDsl() < 100) {
+  if ((d.mask & mask_offline) && u.GetDsl() < 100) {
     return false;
   }
-  if ((d->mask & mask_wwivreg) && !u->GetWWIVRegNumber()) {
+  if ((d.mask & mask_wwivreg) && !u.GetWWIVRegNumber()) {
     return false;
   }
   if (sl == 0) {
@@ -131,10 +127,7 @@ bool access_dir(WUser * u, int sl, directoryrec * d) {
   return true;
 }
 
-
-void addusub(usersubrec * ss1, int ns, int sub, char key) {
-  WWIV_ASSERT(ss1);
-
+static void addusub(std::vector<usersubrec>& ss1, int ns, int sub, char key) {
   int last_num = 0, last;
   for (last = 0; last < ns; last++) {
     if (ss1[last].subnum == -1) {
@@ -153,72 +146,59 @@ void addusub(usersubrec * ss1, int ns, int sub, char key) {
   }
 
   if (key) {
-    ss1[last].subnum = static_cast< short >(sub);
+    ss1[last].subnum = static_cast<int16_t>(sub);
     ss1[last].keys[0] = key;
   } else {
     for (int i = last; i > last_num; i--) {
-      ss1[ i ] = ss1[ i - 1 ];
+      ss1[i] = ss1[ i - 1 ];
     }
-    ss1[last_num].subnum = static_cast< short >(sub);
+    ss1[last_num].subnum = static_cast<int16_t>(sub);
     ss1[last_num].keys[0] = 0;
   }
 }
 
 // returns true on success, false on failure
 // used to return 0 on success, 1 on failure
-bool setconf(unsigned int nConferenceType, int which, int nOldSubNumber) {
-  int i, i1, ns, osub;
+static bool setconf(ConferenceType type, std::vector<usersubrec>& ss1, int which, int old_subnum) {
+  int osub;
   confrec *c;
-  usersubrec *ss1, s1;
-  char *xdc, *xtc;
 
-  int dp = 1;
-  int tp = 0;
-
-  switch (nConferenceType) {
-  case CONF_SUBS:
-
-    ss1 = usub;
-    ns = session()->num_subs;
-    if (nOldSubNumber == -1) {
-      osub = usub[session()->GetCurrentMessageArea()].subnum;
+  size_t ns = 0;
+  switch (type) {
+  case ConferenceType::CONF_SUBS:
+    ns = a()->subs().subs().size();
+    if (old_subnum == -1) {
+      osub = a()->current_user_sub().subnum;
     } else {
-      osub = nOldSubNumber;
+      osub = old_subnum;
     }
-    xdc = dc;
-    xtc = tc;
-    xdc[0] = '/';
     if (which == -1) {
       c = nullptr;
     } else {
-      if (which < 0 || which >= subconfnum) {
+      if (which < 0 || which >= size_int(a()->subconfs)) {
         return false;
       }
-      c = &(subconfs[which]);
-      if (!access_conf(session()->user(), session()->GetEffectiveSl(), c)) {
+      c = &(a()->subconfs[which]);
+      if (!access_conf(a()->user(), a()->effective_sl(), c)) {
         return false;
       }
     }
     break;
-  case CONF_DIRS:
-    ss1 = udir;
-    ns = session()->num_dirs;
-    if (nOldSubNumber == -1) {
-      osub = udir[session()->GetCurrentFileArea()].subnum;
+  case ConferenceType::CONF_DIRS:
+    ns = a()->directories.size();
+    if (old_subnum == -1) {
+      osub = a()->current_user_dir().subnum;
     } else {
-      osub = nOldSubNumber;
+      osub = old_subnum;
     }
-    xdc = dcd;
-    xtc = dtc;
-    xdc[0] = '/';
     if (which == -1) {
       c = nullptr;
     } else {
-      if (which < 0 || which >= dirconfnum) {
+      if (which < 0 || which >= size_int(a()->dirconfs)) {
         return false;
       }
-      c = &(dirconfs[which]);
-      if (!access_conf(session()->user(), session()->GetEffectiveSl(), c)) {
+      c = &(a()->dirconfs[which]);
+      if (!access_conf(a()->user(), a()->effective_sl(), c)) {
         return false;
       }
     }
@@ -227,86 +207,70 @@ bool setconf(unsigned int nConferenceType, int which, int nOldSubNumber) {
     return false;
   }
 
-  memset(&s1, 0, sizeof(s1));
+  usersubrec s1 = {};
   s1.subnum = -1;
 
-  for (i = 0; i < ns; i++) {
+  for (size_t i = 0; i < ns; i++) {
     ss1[i] = s1;
   }
 
   if (c) {
-    for (i = 0; i < c->num; i++) {
-      switch (nConferenceType) {
-      case CONF_SUBS:
-        if (access_sub(session()->user(), session()->GetEffectiveSl(),
-                       (subboardrec *) & subboards[c->subs[i]])) {
-          addusub(ss1, ns, c->subs[i], subboards[c->subs[i]].key);
+    for (const auto sub : c->subs) {
+      switch (type) {
+      case ConferenceType::CONF_SUBS:
+        if (access_sub(*a()->user(), a()->effective_sl(),
+                       a()->subs().sub(sub))) {
+          addusub(ss1, ns, sub, a()->subs().sub(sub).key);
         }
         break;
-      case CONF_DIRS:
-        if (access_dir(session()->user(), session()->GetEffectiveSl(),
-                       (directoryrec *) & directories[c->subs[i]])) {
-          addusub(ss1, ns, c->subs[i], 0);
+      case ConferenceType::CONF_DIRS:
+        if (access_dir(*a()->user(), a()->effective_sl(),
+                       a()->directories[sub])) {
+          addusub(ss1, ns, sub, 0);
         }
         break;
       default:
-        std::clog << "[utility.cpp] setconf called with nConferenceType != (CONF_SUBS || CONF_DIRS)\r\n";
-        WWIV_ASSERT(true);
+        LOG(FATAL) << "[utility.cpp] setconf called with nConferenceType != (ConferenceType::CONF_SUBS || ConferenceType::CONF_DIRS)\r\n";
         break;
       }
     }
   } else {
-    switch (nConferenceType) {
-    case CONF_SUBS:
-      for (i = 0; i < subconfnum; i++) {
-        if (access_conf(session()->user(), session()->GetEffectiveSl(), &(subconfs[i]))) {
-          for (i1 = 0; i1 < subconfs[i].num; i1++) {
-            if (access_sub(session()->user(), session()->GetEffectiveSl(),
-                           (subboardrec *) & subboards[subconfs[i].subs[i1]])) {
-              addusub(ss1, ns, subconfs[i].subs[i1], subboards[subconfs[i].subs[i1]].key);
+    switch (type) {
+    case ConferenceType::CONF_SUBS:
+      for (const auto& conf : a()->subconfs) {
+        if (access_conf(a()->user(), a()->effective_sl(), &conf)) {
+          for (const auto sub : conf.subs) {
+            if (access_sub(*a()->user(), a()->effective_sl(), a()->subs().sub(sub))) {
+              addusub(ss1, ns, sub, a()->subs().sub(sub).key);
             }
           }
         }
       }
       break;
-    case CONF_DIRS:
-      for (i = 0; i < dirconfnum; i++) {
-        if (access_conf(session()->user(), session()->GetEffectiveSl(), &(dirconfs[i]))) {
-          for (i1 = 0; i1 < static_cast<int>(dirconfs[i].num); i1++) {
-            if (access_dir(session()->user(), session()->GetEffectiveSl(),
-                           (directoryrec *) & directories[dirconfs[i].subs[i1]])) {
-              addusub(ss1, ns, dirconfs[i].subs[i1], 0);
+    case ConferenceType::CONF_DIRS:
+      for (const auto& conf : a()->dirconfs) {
+        if (access_conf(a()->user(), a()->effective_sl(), &conf)) {
+          for (const auto& sub : conf.subs) {
+            if (access_dir(*a()->user(), a()->effective_sl(),
+                           a()->directories[sub])) {
+              addusub(ss1, ns, sub, 0);
             }
           }
         }
       }
       break;
     default:
-      std::clog << "[utility.cpp] setconf called with nConferenceType != (CONF_SUBS || CONF_DIRS)\r\n";
-      WWIV_ASSERT(true);
+      LOG(FATAL) << "[utility.cpp] setconf called with nConferenceType != (ConferenceType::CONF_SUBS || ConferenceType::CONF_DIRS)\r\n";
       break;
 
     }
   }
 
-  i1 = (nConferenceType == CONF_DIRS && ss1[0].subnum == 0) ? 0 : 1;
+  uint16_t i1 = (type == ConferenceType::CONF_DIRS && ss1[0].subnum == 0) ? 0 : 1;
 
-  for (i = 0; (i < ns) && (ss1[i].keys[0] == 0) && (ss1[i].subnum != -1); i++) {
-    if (i1 < 100) {
-      if (((i1 % 10) == 0) && i1) {
-        xdc[dp++] = static_cast< char >('0' + (i1 / 10));
-      }
-    } else {
-      if ((i1 % 100) == 0) {
-        xtc[tp++] = static_cast< char >('0' + (i1 / 100));
-      }
-    }
+  for (size_t i = 0; (i < ns) && (ss1[i].keys[0] == 0) && (ss1[i].subnum != -1); i++) {
     snprintf(ss1[i].keys, sizeof(ss1[i].keys), "%d", i1++);
   }
-
-
-  xdc[dp] = '\0';
-  xtc[tp] = '\0';
 
   for (i1 = 0; (i1 < ns) && (ss1[i1].subnum != -1); i1++) {
     if (ss1[i1].subnum == osub) {
@@ -317,106 +281,105 @@ bool setconf(unsigned int nConferenceType, int which, int nOldSubNumber) {
     i1 = 0;
   }
 
-  switch (nConferenceType) {
-  case CONF_SUBS:
-    session()->SetCurrentMessageArea(i1);
+  switch (type) {
+  case ConferenceType::CONF_SUBS:
+    a()->set_current_user_sub_num(i1);
     break;
-  case CONF_DIRS:
-    session()->SetCurrentFileArea(i1);
+  case ConferenceType::CONF_DIRS:
+    a()->set_current_user_dir_num(i1);
     break;
   }
-
   return true;
 }
 
-
-void setuconf(int nConferenceType, int num, int nOldSubNumber) {
+void setuconf(ConferenceType nConferenceType, int num, int nOldSubNumber) {
   switch (nConferenceType) {
-  case CONF_SUBS:
-    if (num >= 0 && num < MAX_CONFERENCES && uconfsub[num].confnum != -1) {
-      session()->SetCurrentConferenceMessageArea(num);
-      setconf(nConferenceType, uconfsub[session()->GetCurrentConferenceMessageArea()].confnum, nOldSubNumber);
-      return;
+  case ConferenceType::CONF_SUBS:
+    if (num >= 0 && num < MAX_CONFERENCES && a()->uconfsub[num].confnum != -1) {
+      a()->SetCurrentConferenceMessageArea(num);
+      setconf(nConferenceType, a()->usub, a()->uconfsub[a()->GetCurrentConferenceMessageArea()].confnum, nOldSubNumber);
+    } else {
+      setconf(nConferenceType, a()->usub, -1, nOldSubNumber);
     }
     break;
-  case CONF_DIRS:
-    if (num >= 0 && num < MAX_CONFERENCES && uconfdir[num].confnum != -1) {
-      session()->SetCurrentConferenceFileArea(num);
-      setconf(nConferenceType, uconfdir[session()->GetCurrentConferenceFileArea()].confnum, nOldSubNumber);
-      return;
+  case ConferenceType::CONF_DIRS:
+    if (num >= 0 && num < MAX_CONFERENCES && a()->uconfdir[num].confnum != -1) {
+      a()->SetCurrentConferenceFileArea(num);
+      setconf(nConferenceType, a()->udir, a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum, nOldSubNumber);
+    } else {
+      setconf(nConferenceType, a()->udir, -1, nOldSubNumber);
     }
     break;
   default:
-    std::clog << "[utility.cpp] setuconf called with nConferenceType != (CONF_SUBS || CONF_DIRS)\r\n";
-    WWIV_ASSERT(true);
+    LOG(FATAL) << "[utility.cpp] setuconf called with nConferenceType != (ConferenceType::CONF_SUBS || ConferenceType::CONF_DIRS)\r\n";
     break;
   }
-  setconf(nConferenceType, -1, nOldSubNumber);
 }
 
-
 void changedsl() {
-  int ocurconfsub = uconfsub[session()->GetCurrentConferenceMessageArea()].confnum;
-  int ocurconfdir = uconfdir[session()->GetCurrentConferenceFileArea()].confnum;
-  application()->UpdateTopScreen();
+  int ocurconfsub = a()->uconfsub[a()->GetCurrentConferenceMessageArea()].confnum;
+  int ocurconfdir = a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum;
+  a()->UpdateTopScreen();
 
-  userconfrec c1;
-  c1.confnum = -1;
+  userconfrec c1{ -1 };
 
-  int i;
-  for (i = 0; i < MAX_CONFERENCES; i++) {
-    uconfsub[i] = c1;
-    uconfdir[i] = c1;
+  a()->uconfsub.clear();
+  a()->uconfdir.clear();
+
+  for (size_t i = 0; i < MAX_CONFERENCES; i++) {
+    a()->uconfsub.push_back(c1);
+    a()->uconfdir.push_back(c1);
   }
 
   int nTempSubConferenceNumber = 0;
-  for (i = 0; i < subconfnum; i++) {
-    if (access_conf(session()->user(), session()->GetEffectiveSl(), &(subconfs[i]))) {
-      c1.confnum = static_cast< short >(i);
-      uconfsub[ nTempSubConferenceNumber++ ] = c1;
+  for (size_t i = 0; i < a()->subconfs.size(); i++) {
+    if (access_conf(a()->user(), a()->effective_sl(), &(a()->subconfs[i]))) {
+      c1.confnum = static_cast<int16_t>(i);
+      a()->uconfsub[nTempSubConferenceNumber++] = c1;
     }
   }
 
   int nTempDirConferenceNumber = 0;
-  for (i = 0; i < dirconfnum; i++) {
-    if (access_conf(session()->user(), session()->GetEffectiveSl(), &(dirconfs[i ]))) {
-      c1.confnum = static_cast< short >(i);
-      uconfdir[ nTempDirConferenceNumber++ ] = c1;
+  for (size_t i = 0; i < a()->dirconfs.size(); i++) {
+    if (access_conf(a()->user(), a()->effective_sl(), &(a()->dirconfs[i ]))) {
+      c1.confnum = static_cast<int16_t>(i);
+      a()->uconfdir[nTempDirConferenceNumber++] = c1;
     }
   }
 
-  for (session()->SetCurrentConferenceMessageArea(0);
-       (session()->GetCurrentConferenceMessageArea() < MAX_CONFERENCES)
-       && (uconfsub[session()->GetCurrentConferenceMessageArea()].confnum != -1);
-       session()->SetCurrentConferenceMessageArea(session()->GetCurrentConferenceMessageArea() + 1)) {
-    if (uconfsub[session()->GetCurrentConferenceMessageArea()].confnum == ocurconfsub) {
+  for (a()->SetCurrentConferenceMessageArea(0);
+       (a()->GetCurrentConferenceMessageArea() < MAX_CONFERENCES)
+       && (a()->uconfsub[a()->GetCurrentConferenceMessageArea()].confnum != -1);
+       a()->SetCurrentConferenceMessageArea(a()->GetCurrentConferenceMessageArea() + 1)) {
+    if (a()->uconfsub[a()->GetCurrentConferenceMessageArea()].confnum == ocurconfsub) {
       break;
     }
   }
 
-  if (session()->GetCurrentConferenceMessageArea() >= MAX_CONFERENCES ||
-      uconfsub[session()->GetCurrentConferenceMessageArea()].confnum == -1) {
-    session()->SetCurrentConferenceMessageArea(0);
+  if (a()->GetCurrentConferenceMessageArea() >= MAX_CONFERENCES ||
+    a()->uconfsub[a()->GetCurrentConferenceMessageArea()].confnum == -1) {
+    a()->SetCurrentConferenceMessageArea(0);
   }
 
-  for (session()->SetCurrentConferenceFileArea(0); (session()->GetCurrentConferenceFileArea() < MAX_CONFERENCES)
-       && (uconfdir[session()->GetCurrentConferenceFileArea()].confnum != -1);
-       session()->SetCurrentConferenceMessageArea(session()->GetCurrentConferenceFileArea() + 1)) {
-    if (uconfdir[session()->GetCurrentConferenceFileArea()].confnum == ocurconfdir) {
+  for (a()->SetCurrentConferenceFileArea(0);
+       (a()->GetCurrentConferenceFileArea() < MAX_CONFERENCES)
+       && (a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum != -1);
+       a()->SetCurrentConferenceFileArea(a()->GetCurrentConferenceFileArea() + 1)) {
+    if (a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum == ocurconfdir) {
       break;
     }
   }
 
-  if (session()->GetCurrentConferenceFileArea() >= MAX_CONFERENCES ||
-      uconfdir[session()->GetCurrentConferenceFileArea()].confnum == -1) {
-    session()->SetCurrentConferenceFileArea(0);
+  if (a()->GetCurrentConferenceFileArea() >= MAX_CONFERENCES ||
+    a()->uconfdir[a()->GetCurrentConferenceFileArea()].confnum == -1) {
+    a()->SetCurrentConferenceFileArea(0);
   }
 
-  if (okconf(session()->user())) {
-    setuconf(CONF_SUBS, session()->GetCurrentConferenceMessageArea(), -1);
-    setuconf(CONF_DIRS, session()->GetCurrentConferenceFileArea(), -1);
+  if (okconf(a()->user())) {
+    setuconf(ConferenceType::CONF_SUBS, a()->GetCurrentConferenceMessageArea(), -1);
+    setuconf(ConferenceType::CONF_DIRS, a()->GetCurrentConferenceFileArea(), -1);
   } else {
-    setconf(CONF_SUBS, -1, -1);
-    setconf(CONF_DIRS, -1, -1);
+    setconf(ConferenceType::CONF_SUBS, a()->usub, -1, -1);
+    setconf(ConferenceType::CONF_DIRS, a()->udir, -1, -1);
   }
 }

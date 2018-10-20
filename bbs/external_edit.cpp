@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -21,235 +21,39 @@
 #include <algorithm>
 #include <string>
 
-#ifdef _WIN32
-#include <direct.h>
-#else
-#include <unistd.h>
-#endif  // _WIN32
-
-#include "bbs/wwiv.h"
-#include "bbs/platform/platformfcns.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/execexternal.h"
+#include "bbs/external_edit_qbbs.h"
+#include "bbs/external_edit_wwiv.h"
+#include "bbs/make_abs_cmd.h"
+#include "bbs/message_editor_data.h"
+#include "bbs/pause.h"
+#include "bbs/utility.h"
 #include "core/scope_exit.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/textfile.h"
 
 #include "bbs/stuffin.h"
-#include "bbs/wconstants.h"
-
+#include "local_io/wconstants.h"
+#include "sdk/filenames.h"
 
 using std::string;
 using wwiv::core::ScopeExit;
+using namespace wwiv::bbs;
+using namespace wwiv::core;
 using namespace wwiv::strings;
 
-// Local prototypes.
-bool external_edit_internal(const string& edit_filename, const string& new_directory, const editorrec& editor, int numlines);
-
-static void RemoveEditorFileFromTemp(const string& filename) {
-  File file(syscfgovr.tempdir, filename);
-  file.SetFilePermissions(File::permReadWrite);
-  file.Delete();
-}
-
-static void RemoveWWIVControlFiles() {
-  RemoveEditorFileFromTemp(FEDIT_INF);
-  RemoveEditorFileFromTemp(RESULT_ED);
-  RemoveEditorFileFromTemp(EDITOR_INF);
-}
-
-static void RemoveQBBSControlFiles() {
-  RemoveEditorFileFromTemp(MSGINF);
-  RemoveEditorFileFromTemp(MSGTMP);
-}
-
-static void RemoveControlFiles(const editorrec& editor) {
-  if (editor.bbs_type == EDITORREC_EDITOR_TYPE_QBBS) {
-    RemoveQBBSControlFiles();
-  } else {
-    RemoveWWIVControlFiles();
-  }
-}
-
-static void ReadWWIVResultFiles(string* title, int* anon) {
-  if (File::Exists(syscfgovr.tempdir, RESULT_ED)) {
-    TextFile file(syscfgovr.tempdir, RESULT_ED, "rt");
-    string anon_string;
-    if (file.ReadLine(&anon_string)) {
-      *anon = atoi(anon_string.c_str());
-      if (file.ReadLine(title)) {
-        // Strip whitespace from title to avoid issues like bug #29
-        StringTrim(title);
-      }
-    }
-    file.Close();
-  } else if (File::Exists(syscfgovr.tempdir, FEDIT_INF)) {
-    fedit_data_rec fedit_data;
-    memset(&fedit_data, '\0', sizeof(fedit_data_rec));
-    File file(syscfgovr.tempdir, FEDIT_INF);
-    file.Open(File::modeBinary | File::modeReadOnly);
-      if (file.Read(&fedit_data, sizeof(fedit_data))) {
-        title->assign(fedit_data.ttl);
-        *anon = fedit_data.anon;
-      }
-
-  }
-}
-
-static bool WriteMsgInf(const string& title, const string& destination, const string& aux) {
-  TextFile file(syscfgovr.tempdir, MSGINF, "wt");
-  if (!file.IsOpen()) {
-    return false;
-  }
-
-  file.WriteLine(session()->user()->GetName());
-  if (aux == "email") {
-    // destination == to address for email
-    file.WriteLine(destination);
-  } else {
-    if (strlen(irt_name) > 0) {
-      file.WriteLine(irt_name);
-    } else {
-      // Since we don't know who this is to, make it all.
-      file.WriteLine("All"); 
-    }
-  }
-  file.WriteLine(title);
-  file.WriteLine("0"); // Message area # - We are not QBBS
-  if (aux == "email") {
-    file.WriteLine("E-mail");
-    // Is the message private [YES|NO]
-    file.WriteLine("YES");
-  } else {
-    file.WriteLine(destination);
-    // Is the message private [YES|NO]
-    file.WriteLine("NO");
-  }
-  file.Close();
-  return true;
-}
-
-static void WriteWWIVEditorControlFiles(const string& title, const string& destination, int flags) {
-  TextFile fileEditorInf(syscfgovr.tempdir, EDITOR_INF, "wt");
-  if (fileEditorInf.IsOpen()) {
-    if (irt_name[0]) {
-      flags |= MSGED_FLAG_HAS_REPLY_NAME;
-    }
-    if (irt[0]) {
-      flags |= MSGED_FLAG_HAS_REPLY_TITLE;
-    }
-    fileEditorInf.WriteFormatted(
-      "%s\n%s\n%lu\n%s\n%s\n%u\n%u\n%lu\n%u\n",
-      title.c_str(),
-      destination.c_str(),
-      session()->usernum,
-      session()->user()->GetName(),
-      session()->user()->GetRealName(),
-      session()->user()->GetSl(),
-      flags,
-      session()->localIO()->GetTopLine(),
-      session()->user()->GetLanguage());
-    fileEditorInf.Close();
-  }
-  if (flags & MSGED_FLAG_NO_TAGLINE) {
-    // disable tag lines by creating a DISABLE.TAG file
-    TextFile fileDisableTag(DISABLE_TAG, "w");
-  } else {
-    RemoveEditorFileFromTemp(DISABLE_TAG);
-  }
-  if (!irt[0]) {
-    RemoveEditorFileFromTemp(QUOTES_TXT);
-    RemoveEditorFileFromTemp(QUOTES_IND);
-  }
-
-  // Write FEDIT.INF
-  fedit_data_rec fedit_data;
-  memset(&fedit_data, '\0', sizeof(fedit_data_rec));
-  fedit_data.tlen = 60;
-  strcpy(fedit_data.ttl, title.c_str());
-  fedit_data.anon = 0;
-
-  File fileFEditInf(syscfgovr.tempdir, FEDIT_INF);
-  if (fileFEditInf.Open(File::modeDefault | File::modeCreateFile | File::modeTruncate, File::shareDenyRead)) {
-    fileFEditInf.Write(&fedit_data, sizeof(fedit_data));
-    fileFEditInf.Close();
-  }
-}
-
-bool WriteExternalEditorControlFiles(const editorrec& editor, const string& title, const string& destination, int flags, const string& aux) {
-  if (editor.bbs_type == EDITORREC_EDITOR_TYPE_QBBS) {
-    if (File::Exists(syscfgovr.tempdir, QUOTES_TXT)) {
-      // Copy quotes.txt to MSGTMP if it exists
-      File source(syscfgovr.tempdir, QUOTES_TXT);
-      File dest(syscfgovr.tempdir, MSGTMP);
-      File::Copy(source.full_pathname(), dest.full_pathname());
-    }
-    return WriteMsgInf(title, destination, aux);
-  } 
-
-  WriteWWIVEditorControlFiles(title, destination, flags);
-  return true;
-}
-
-bool ExternalMessageEditor(int maxli, int *setanon, string *title, const string& destination, int flags, const string& aux) {
-  const auto editor_number = session()->user()->GetDefaultEditor() - 1;
-  if (editor_number >= session()->GetNumberOfEditors() || !okansi()) {
-    bout << "\r\nYou can't use that full screen editor.\r\n\n";
-    return false;
-  }
-
-  const editorrec& editor = editors[editor_number];
-  RemoveControlFiles(editor);
-  ScopeExit on_exit([=] { RemoveControlFiles(editor); });
-
-  const string editor_filenme = (editor.bbs_type == EDITORREC_EDITOR_TYPE_QBBS) ? MSGTMP : INPUT_MSG;
-
-  WriteExternalEditorControlFiles(editor, *title, destination, flags, aux);
-  bool save_message = external_edit_internal(editor_filenme, syscfgovr.tempdir, editor, maxli);
-
-  if (!save_message) {
-    return false;
-  }
-
-  if (editor.bbs_type == EDITORREC_EDITOR_TYPE_QBBS) {
-    // Copy MSGTMP to INPUT_MSG since that's what the rest of WWIV expectes.
-    // TODO(rushfan): Let this function return an object with result and filename and anything
-    // else that needs to be passed back.
-    File source(syscfgovr.tempdir, MSGTMP);
-    File dest(syscfgovr.tempdir, INPUT_MSG);
-    File::Copy(source.full_pathname(), dest.full_pathname());
-
-    // TODO(rushfan): Do we need to re-read MSGINF to look for changes to title or setanon?
-  } else {
-    ReadWWIVResultFiles(title, setanon);
-  }
-  return true;
-}
-
-bool external_text_edit(const string& edit_filename, const string& new_directory, int numlines,
-                        const string& destination, int flags) {
-  bout.nl();
-  const auto editor_number = session()->user()->GetDefaultEditor() - 1;
-  if (editor_number >= session()->GetNumberOfEditors() || !okansi()) {
-    bout << "You can't use that full screen editor." << wwiv::endl << wwiv::endl;
-    pausescr();
-    return false;
-  }
-
-  RemoveWWIVControlFiles();
-  const editorrec& editor = editors[editor_number];
-  WriteExternalEditorControlFiles(editor, edit_filename, destination, flags, "");
-  bool result = external_edit_internal(edit_filename, new_directory, editor, numlines);
-  RemoveWWIVControlFiles();
-  return result;
-}
-
+/////////////////////////////////////////////////////////////////////////////
 // Actually launch the editor. This won't create any control files, etc.
-bool external_edit_internal(const string& edit_filename, const string& new_directory, 
-                            const editorrec& editor, int numlines) {
-  
-  string editorCommand = (incom) ? editor.filename : editor.filenamecon;
+static bool external_edit_internal(const string& edit_filename, const string& working_directory,
+                                   const editorrec& editor, int numlines) {
+
+  string editorCommand = (a()->context().incom()) ? editor.filename : editor.filenamecon;
   if (editorCommand.empty()) {
-    bout << "You can't use that full screen editor." << wwiv::endl << wwiv::endl;
-      pausescr();
+    bout << "You can't use that full screen editor. (eti)" << wwiv::endl << wwiv::endl;
+    pausescr();
     return false;
   }
 
@@ -263,60 +67,89 @@ bool external_edit_internal(const string& edit_filename, const string& new_direc
     }
   }
 
-  WWIV_make_abs_cmd(application()->GetHomeDir(), &editorCommand);
-  const string original_directory = File::current_directory();
+  make_abs_cmd(a()->bbsdir(), &editorCommand);
 
-  string strippedFileName(stripfn(edit_filename.c_str()));
-  if (!new_directory.empty()) {
-    chdir(new_directory.c_str()) ;
+  string strippedFileName{stripfn(edit_filename.c_str())};
+  ScopeExit on_exit;
+  if (!working_directory.empty()) {
+    const auto original_directory = File::current_directory();
+    File::set_current_directory(working_directory);
+    on_exit.swap([=] { File::set_current_directory(original_directory); });
   }
 
-  time_t tFileTime = 0;
-  File fileTempForTime(File::current_directory(), strippedFileName);
-  bool bIsFileThere = fileTempForTime.Exists();
-  if (bIsFileThere) {
-    tFileTime = fileTempForTime.last_write_time();
+  File fileTempForTime(FilePath(File::current_directory(), strippedFileName));
+  time_t tFileTime = fileTempForTime.Exists() ? fileTempForTime.last_write_time() : 0;
+
+  auto num_screen_lines = a()->user()->GetScreenLines();
+  if (!a()->using_modem) {
+    int newtl = (a()->screenlinest > a()->defscreenbottom - a()->localIO()->GetTopLine())
+                    ? 0
+                    : a()->localIO()->GetTopLine();
+    num_screen_lines = a()->defscreenbottom + 1 - newtl;
   }
 
-  const string sx1 = StringPrintf("%d", session()->user()->GetScreenChars());
-  int num_screen_lines = session()->user()->GetScreenLines();
-  if (!session()->using_modem) {
-    int newtl = (session()->screenlinest > defscreenbottom - session()->localIO()->GetTopLine()) ? 0 :
-                session()->localIO()->GetTopLine();
-    num_screen_lines = defscreenbottom + 1 - newtl;
-  }
-  const string sx2 = StringPrintf("%d", num_screen_lines);
-  const string sx3 = StringPrintf("%d", numlines);
-  const string cmdLine = stuff_in(editorCommand, fileTempForTime.full_pathname(), sx1, sx2, sx3, "");
+  const auto cmdLine = stuff_in(editorCommand, fileTempForTime.full_pathname(),
+                                std::to_string(a()->user()->GetScreenChars()),
+                                std::to_string(num_screen_lines), std::to_string(numlines), "");
 
-  // TODO(rushfan): Make this a common function shared between here and chains.
-  int flags = 0;
-  if (!(editor.ansir & ansir_no_DOS)) {
-    flags |= EFLAG_COMIO;
+  ExecuteExternalProgram(cmdLine, ansir_to_flags(editor.ansir));
+  bout.clear_lines_listed();
+
+  time_t tFileTime1 = fileTempForTime.Exists() ? fileTempForTime.last_write_time() : 0;
+  return fileTempForTime.Exists() && (tFileTime != tFileTime1);
+}
+
+static std::unique_ptr<ExternalMessageEditor>
+CreateExternalMessageEditor(const editorrec& editor, MessageEditorData& data, int maxli,
+                            int* setanon, const std::string& temp_directory) {
+  if (editor.bbs_type == EDITORREC_EDITOR_TYPE_QBBS) {
+    return std::make_unique<ExternalQBBSMessageEditor>(editor, data, maxli, setanon,
+                                                       a()->temp_directory());
   }
-  if (editor.ansir & ansir_emulate_fossil) {
-    flags |= EFLAG_FOSSIL;
+  return std::make_unique<ExternalWWIVMessageEditor>(editor, data, maxli, setanon,
+                                                     a()->temp_directory());
+}
+
+bool ExternalMessageEditor::Run() {
+  if (!Before()) {
+    return false;
+  }
+  if (!external_edit_internal(editor_filename(), temp_directory_, editor_, maxli_)) {
+    return false;
+  }
+  return After();
+}
+
+bool DoExternalMessageEditor(MessageEditorData& data, int maxli, int* setanon) {
+  const size_t editor_number = a()->user()->GetDefaultEditor() - 1;
+  if (editor_number >= a()->editors.size() || !okansi()) {
+    bout << "\r\nYou can't use that full screen editor (EME).\r\n\n";
+    return false;
   }
 
-  ExecuteExternalProgram(cmdLine, flags);
+  const auto& editor = a()->editors[editor_number];
+  auto eme = CreateExternalMessageEditor(editor, data, maxli, setanon, a()->temp_directory());
+  return eme->Run();
+}
+
+bool external_text_edit(const string& edit_filename, const string& working_directory, int numlines,
+                        int flags) {
+  bout.nl();
+  const auto editor_number = a()->user()->GetDefaultEditor() - 1;
+  if (editor_number >= wwiv::stl::size_int(a()->editors) || !okansi()) {
+    bout << "You can't use that full screen editor. (ete1)" << wwiv::endl << wwiv::endl;
+    pausescr();
+    return false;
+  }
+
+  const auto& editor = a()->editors[editor_number];
+  MessageEditorData data{};
+  data.msged_flags = flags;
+  int setanon = 0;
+  auto eme = CreateExternalMessageEditor(editor, data, numlines, &setanon, a()->temp_directory());
+  if (!eme->Before()) {
+    return false;
+  }
   
-  // After launched FSED
-  lines_listed = 0;
-  chdir(new_directory.c_str());
-
-  bool bModifiedOrExists = false;
-  const string full_filename = fileTempForTime.full_pathname();
-  if (!bIsFileThere) {
-    bModifiedOrExists = File::Exists(full_filename);
-  } else {
-    File fileTempForTime2(full_filename);
-    if (fileTempForTime2.Exists()) {
-      time_t tFileTime1 = fileTempForTime2.last_write_time();
-      if (tFileTime != tFileTime1) {
-        bModifiedOrExists = true;
-      }
-    }
-  }
-  chdir(original_directory.c_str());
-  return bModifiedOrExists;
+  return external_edit_internal(edit_filename, working_directory, editor, numlines);
 }

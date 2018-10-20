@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,15 +16,24 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/sysoplog.h"
+
 #include <cstdarg>
 #include <cstddef>
 #include <string>
 
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+
 #include "bbs/datetime.h"
-#include "bbs/wwiv.h"
+#include "core/log.h"
 #include "core/strings.h"
+#include "core/datetime.h"
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 // Local function prototypes
@@ -44,46 +53,40 @@ string GetSysopLogFileName(const string& d) {
 /*
 * Returns instance (temporary) sysoplog filename in s.
 */
-void GetTemporaryInstanceLogFileName(char *pszInstanceLogFileName) {
-  sprintf(pszInstanceLogFileName, "inst-%3.3u.log", application()->GetInstanceNumber());
+std::string GetTemporaryInstanceLogFileName() {
+  return StringPrintf("inst-%3.3u.log", a()->instance_number());
 }
 
 /*
 * Copies temporary/instance sysoplog to primary sysoplog file.
 */
 void catsl() {
-  char szInstanceBaseName[MAX_PATH];
-  char szInstanceLogFileName[MAX_PATH];
+  auto temporary_log_filename = GetTemporaryInstanceLogFileName();
+  auto instance_logfilename = FilePath(a()->config()->gfilesdir(), temporary_log_filename);
 
-  GetTemporaryInstanceLogFileName(szInstanceBaseName);
-  sprintf(szInstanceLogFileName, "%s%s", syscfg.gfilesdir, szInstanceBaseName);
+  if (File::Exists(instance_logfilename)) {
+    auto basename = GetSysopLogFileName(date());
+    File wholeLogFile(FilePath(a()->config()->gfilesdir(), basename));
 
-  if (File::Exists(szInstanceLogFileName)) {
-    string basename = GetSysopLogFileName(date());
-    File wholeLogFile(syscfg.gfilesdir, basename);
+    auto buffer = std::make_unique<char[]>(CAT_BUFSIZE);
+    if (wholeLogFile.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile)) {
+      wholeLogFile.Seek(0, File::Whence::begin);
+      wholeLogFile.Seek(0, File::Whence::end);
 
-    char* pLogBuffer = static_cast<char *>(BbsAllocA(CAT_BUFSIZE));
-    if (pLogBuffer) {
-      if (wholeLogFile.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile)) {
-        wholeLogFile.Seek(0, File::seekBegin);
-        wholeLogFile.Seek(0, File::seekEnd);
+      File instLogFile(instance_logfilename);
+      if (instLogFile.Open(File::modeReadOnly | File::modeBinary)) {
+        int num_read = 0;
+        do {
+          num_read = instLogFile.Read(buffer.get(), CAT_BUFSIZE);
+          if (num_read > 0) {
+            wholeLogFile.Write(buffer.get(), num_read);
+          }
+        } while (num_read == CAT_BUFSIZE);
 
-        File instLogFile(szInstanceLogFileName);
-        if (instLogFile.Open(File::modeReadOnly | File::modeBinary)) {
-          int nNumRead = 0;
-          do {
-            nNumRead = instLogFile.Read(pLogBuffer, CAT_BUFSIZE);
-            if (nNumRead > 0) {
-              wholeLogFile.Write(pLogBuffer, nNumRead);
-            }
-          } while (nNumRead == CAT_BUFSIZE);
-
-          instLogFile.Close();
-          instLogFile.Delete();
-        }
-        wholeLogFile.Close();
+        instLogFile.Close();
+        instLogFile.Delete();
       }
-      free(pLogBuffer);
+      wholeLogFile.Close();
     }
   }
 }
@@ -93,30 +96,22 @@ void catsl() {
 */
 void AddLineToSysopLogImpl(int cmd, const string& text) {
   static string::size_type midline = 0;
-  static char s_szLogFileName[MAX_PATH];
-
-  if (!(syscfg.gfilesdir)) {
-    // TODO Use error log.
+  
+  if (a()->config()->gfilesdir().empty()) {
+    LOG(ERROR) << "gfilesdir empty, can't write to sysop log";
     return;
   }
+  const static auto s_sysoplog_filename =
+      FilePath(a()->config()->gfilesdir(), GetTemporaryInstanceLogFileName());
 
-  if (&syscfg.gfilesdir[0] == nullptr) {
-    // If we try to write we will throw a NPE.
-    return;
-  }
-
-  if (!s_szLogFileName[0]) {
-    strcpy(s_szLogFileName, syscfg.gfilesdir);
-    GetTemporaryInstanceLogFileName(s_szLogFileName + strlen(s_szLogFileName));
-  }
   switch (cmd) {
   case LOG_STRING: {  // Write line to sysop's log
-    File logFile(s_szLogFileName);
+    File logFile(s_sysoplog_filename);
     if (!logFile.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile)) {
       return;
     }
-    if (logFile.GetLength()) {
-      logFile.Seek(0L, File::seekEnd);
+    if (logFile.length()) {
+      logFile.Seek(0L, File::Whence::end);
     }
     string logLine;
     if (midline > 0) {
@@ -131,13 +126,13 @@ void AddLineToSysopLogImpl(int cmd, const string& text) {
   }
   break;
   case LOG_CHAR: {
-    File logFile(s_szLogFileName);
+    File logFile(s_sysoplog_filename);
     if (!logFile.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile)) {
       // sysop log ?
       return;
     }
-    if (logFile.GetLength()) {
-      logFile.Seek(0L, File::seekEnd);
+    if (logFile.length()) {
+      logFile.Seek(0L, File::Whence::end);
     }
     string logLine;
     if (midline == 0 || (midline + 2 + text.length()) > 78) {
@@ -159,44 +154,18 @@ void AddLineToSysopLogImpl(int cmd, const string& text) {
 }
 
 /*
-* Writes a string to the sysoplog, if user online and EffectiveSl < 255.
+* Writes a string to the sysoplog.
 */
 void sysopchar(const string& text) {
-  if ((incom || session()->GetEffectiveSl() != 255) && !text.empty()) {
+  if (!text.empty()) {
     AddLineToSysopLogImpl(LOG_CHAR, text);
   }
 }
 
-/*
-* Writes a string to the sysoplog, if EffectiveSl < 255 and user online,
-* indented a few spaces.
-*/
-void sysoplog(const string& text, bool bIndent) {
-  if (bIndent) {
-    AddLineToSysopLogImpl(LOG_STRING, StrCat("   ", text));
+sysoplog::~sysoplog() {
+  if (indent_) {
+    AddLineToSysopLogImpl(LOG_STRING, StrCat("   ", stream_.str()));
   } else {
-    AddLineToSysopLogImpl(LOG_STRING, text);
+    AddLineToSysopLogImpl(LOG_STRING, stream_.str());
   }
-}
-
-// printf style function to write to the sysop log
-void sysoplogf(const char *pszFormat, ...) {
-  va_list ap;
-  char szBuffer[2048];
-
-  va_start(ap, pszFormat);
-  vsnprintf(szBuffer, sizeof(szBuffer), pszFormat, ap);
-  va_end(ap);
-  sysoplog(szBuffer);
-}
-
-// printf style function to write to the sysop log
-void sysoplogfi(bool bIndent, const char *pszFormat, ...) {
-  va_list ap;
-  char szBuffer[2048];
-
-  va_start(ap, pszFormat);
-  vsnprintf(szBuffer, sizeof(szBuffer), pszFormat, ap);
-  va_end(ap);
-  sysoplog(szBuffer, bIndent);
 }

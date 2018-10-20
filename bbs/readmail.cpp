@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,52 +16,84 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/readmail.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsutl1.h"
+#include "bbs/bbsutl2.h"
+#include "bbs/conf.h"
 #include "bbs/datetime.h"
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/com.h"
+#include "bbs/connect1.h"
+#include "bbs/email.h"
+#include "bbs/execexternal.h"
+#include "bbs/extract.h"
+
 #include "bbs/instmsg.h"
 #include "bbs/input.h"
-#include "bbs/wconstants.h"
-#include "bbs/subxtr.h"
+#include "bbs/message_file.h"
+#include "bbs/mmkey.h"
+#include "bbs/msgbase1.h"
+#include "bbs/multmail.h"
+#include "bbs/pause.h"
+#include "bbs/quote.h"
+#include "bbs/read_message.h"
+#include "bbs/showfiles.h"
+#include "bbs/sublist.h"
+#include "local_io/wconstants.h"
 #include "bbs/printfile.h"
+#include "bbs/shortmsg.h"
+#include "bbs/subacc.h"
+#include "bbs/sysopf.h"
+#include "bbs/sr.h"
+#include "bbs/sysoplog.h"
 #include "bbs/uedit.h"
-#include "bbs/wstatus.h"
+#include "bbs/utility.h"
+#include "bbs/xfer.h"
+#include "sdk/status.h"
+#include "bbs/workspace.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/textfile.h"
 #include "core/wwivassert.h"
+#include "sdk/filenames.h"
+#include "sdk/names.h"
+#include "sdk/msgapi/message_utils_wwiv.h"
 
 using std::string;
 using std::unique_ptr;
+using std::vector;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
+using namespace wwiv::sdk::msgapi;
+using namespace wwiv::stl;
 using namespace wwiv::strings;
 
-// Local Functions
-bool same_email(tmpmailrec * tm, mailrec * m);
-void purgemail(tmpmailrec * mloc, int mw, int *curmail, mailrec * m1, slrec * ss);
-void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, unsigned short stat);
-bool read_same_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, unsigned short stat);
-void add_netsubscriber(int nSystemNumber);
-
 // Implementation
-bool same_email(tmpmailrec * tm, mailrec * m) {
-  if (tm->fromsys != m->fromsys ||
-      tm->fromuser != m->fromuser ||
-      m->tosys != 0 ||
-      m->touser != session()->usernum ||
-      tm->daten != m->daten ||
-      tm->index == -1 ||
-      memcmp(&tm->msg, &m->msg, sizeof(messagerec)) != 0) {
+static bool same_email(tmpmailrec& tm, const mailrec& m) {
+  if (tm.fromsys != m.fromsys ||
+      tm.fromuser != m.fromuser ||
+      m.tosys != 0 ||
+      m.touser != a()->usernum ||
+      tm.daten != m.daten ||
+      tm.index == -1 ||
+      memcmp(&tm.msg, &m.msg, sizeof(messagerec)) != 0) {
     return false;
   }
   return true;
 }
 
-void purgemail(tmpmailrec * mloc, int mw, int *curmail, mailrec * m1, slrec * ss) {
+static void purgemail(vector<tmpmailrec>& mloc, int mw, int *curmail, mailrec * m1, slrec * sl) {
   mailrec m;
 
-  if ((m1->anony & anony_sender) && ((ss->ability & ability_read_email_anony) == 0)) {
+  if ((m1->anony & anony_sender) && ((sl->ability & ability_read_email_anony) == 0)) {
     bout << "|#5Delete all mail to you from this user? ";
   } else {
     bout << "|#5Delete all mail to you from ";
@@ -82,12 +114,12 @@ void purgemail(tmpmailrec * mloc, int mw, int *curmail, mailrec * m1, slrec * ss
     }
     for (int i = 0; i < mw; i++) {
       if (mloc[i].index >= 0) {
-        pFileEmail->Seek(mloc[i].index * sizeof(mailrec), File::seekBegin);
+        pFileEmail->Seek(mloc[i].index * sizeof(mailrec), File::Whence::begin);
         pFileEmail->Read(&m, sizeof(mailrec));
-        if (same_email(mloc + i, &m)) {
+        if (same_email(mloc[i], m)) {
           if (m.fromuser == m1->fromuser && m.fromsys == m1->fromsys) {
             bout << "Deleting mail msg #" << i + 1 << wwiv::endl;
-            delmail(pFileEmail.get(), mloc[i].index);
+            delmail(*pFileEmail.get(), mloc[i].index);
             mloc[i].index = -1;
             if (*curmail == i) {
               ++(*curmail);
@@ -104,13 +136,13 @@ void purgemail(tmpmailrec * mloc, int mw, int *curmail, mailrec * m1, slrec * ss
   }
 }
 
-void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, unsigned short stat) {
+static void resynch_email(vector<tmpmailrec>& mloc, int mw, int rec, mailrec * m, int del, unsigned short stat) {
   int i, i1;
   mailrec m1;
 
   unique_ptr<File> pFileEmail(OpenEmailFile(del || stat));
   if (pFileEmail->IsOpen()) {
-    int mfl = pFileEmail->GetLength() / sizeof(mailrec);
+    int mfl = pFileEmail->length() / sizeof(mailrec);
 
     for (i = 0; i < mw; i++) {
       if (mloc[i].index >= 0) {
@@ -121,13 +153,13 @@ void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, uns
     int mp = 0;
 
     for (i = 0; i < mfl; i++) {
-      pFileEmail->Seek(i * sizeof(mailrec), File::seekBegin);
+      pFileEmail->Seek(i * sizeof(mailrec), File::Whence::begin);
       pFileEmail->Read(&m1, sizeof(mailrec));
 
-      if (m1.tosys == 0 && m1.touser == session()->usernum) {
+      if (m1.tosys == 0 && m1.touser == a()->usernum) {
         for (i1 = mp; i1 < mw; i1++) {
-          if (same_email(mloc + i1, &m1)) {
-            mloc[i1].index = static_cast< short >(i);
+          if (same_email(mloc[i1], m1)) {
+            mloc[i1].index = static_cast<int16_t>(i);
             mp = i1 + 1;
             if (i1 == rec) {
               *m = m1;
@@ -146,7 +178,7 @@ void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, uns
 
     if (stat && !del && (mloc[rec].index >= 0)) {
       m->status |= stat;
-      pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::seekBegin);
+      pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::Whence::begin);
       pFileEmail->Write(m, sizeof(mailrec));
     }
     if (del && (mloc[rec].index >= 0)) {
@@ -156,10 +188,10 @@ void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, uns
         m->daten = 0xffffffff;
         m->msg.storage_type = 0;
         m->msg.stored_as = 0xffffffff;
-        pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::seekBegin);
+        pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::Whence::begin);
         pFileEmail->Write(m, sizeof(mailrec));
       } else {
-        delmail(pFileEmail.get(), mloc[rec].index);
+        delmail(*pFileEmail.get(), mloc[rec].index);
       }
       mloc[rec].index = -1;
     }
@@ -169,40 +201,41 @@ void resynch_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, uns
   }
 }
 
-bool read_same_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, unsigned short stat) {
+// used in qwk1.cpp
+bool read_same_email(std::vector<tmpmailrec>& mloc, int mw, int rec, mailrec& m, int del, unsigned short stat) {
   if (mloc[rec].index < 0) {
     return false;
   }
 
   unique_ptr<File> pFileEmail(OpenEmailFile(del || stat));
-  pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::seekBegin);
-  pFileEmail->Read(m, sizeof(mailrec));
+  pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::Whence::begin);
+  pFileEmail->Read(&m, sizeof(mailrec));
 
-  if (!same_email(mloc + rec, m)) {
+  if (!same_email(mloc[rec], m)) {
     pFileEmail->Close();
-    application()->GetStatusManager()->RefreshStatusCache();
-    if (emchg) {
-      resynch_email(mloc, mw, rec, m, del, stat);
+    a()->status_manager()->RefreshStatusCache();
+    if (a()->emchg_) {
+      resynch_email(mloc, mw, rec, &m, del, stat);
     } else {
       mloc[rec].index = -1;
     }
   } else {
     if (stat && !del && (mloc[rec].index >= 0)) {
-      m->status |= stat;
-      pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::seekBegin);
-      pFileEmail->Write(m, sizeof(mailrec));
+      m.status |= stat;
+      pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::Whence::begin);
+      pFileEmail->Write(&m, sizeof(mailrec));
     }
     if (del) {
       if (del == 2) {
-        m->touser = 0;
-        m->tosys = 0;
-        m->daten = 0xffffffff;
-        m->msg.storage_type = 0;
-        m->msg.stored_as = 0xffffffff;
-        pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::seekBegin);
-        pFileEmail->Write(m, sizeof(mailrec));
+        m.touser = 0;
+        m.tosys = 0;
+        m.daten = 0xffffffff;
+        m.msg.storage_type = 0;
+        m.msg.stored_as = 0xffffffff;
+        pFileEmail->Seek(mloc[rec].index * sizeof(mailrec), File::Whence::begin);
+        pFileEmail->Write(&m, sizeof(mailrec));
       } else {
-        delmail(pFileEmail.get(), mloc[rec].index);
+        delmail(*pFileEmail.get(), mloc[rec].index);
       }
       mloc[rec].index = -1;
     }
@@ -211,57 +244,51 @@ bool read_same_email(tmpmailrec * mloc, int mw, int rec, mailrec * m, int del, u
   return (mloc[rec].index != -1);
 }
 
-void add_netsubscriber(int nSystemNumber) {
-  char s[10], s1[10];
-
-  if (!valid_system(nSystemNumber)) {
-    nSystemNumber = 0;
+static void add_netsubscriber(const net_networks_rec& net, int network_number, int system_number) {
+  if (!valid_system(system_number)) {
+    system_number = 0;
   }
 
   bout.nl();
   bout << "|#1Adding subscriber to subscriber list...\r\n\n";
   bout << "|#2SubType: ";
-  input(s, 7, true);
-  if (s[0] == 0) {
+  auto subtype = input(7, true);
+  if (subtype.empty()) {
     return;
   }
-  strcpy(s1, s);
-  char szNetworkFileName[ MAX_PATH ];
-  sprintf(szNetworkFileName, "%sn%s.net", session()->GetNetworkDataDirectory().c_str(), s);
-  if (!File::Exists(szNetworkFileName)) {
+  const auto fn = StrCat(net.dir, "n", subtype, ".net");
+  if (!File::Exists(fn)) {
     bout.nl();
-    bout << "|#6Subscriber file not found: " << szNetworkFileName << wwiv::endl;
+    bout << "|#6Subscriber file not found: " << fn << wwiv::endl;
     return;
   }
   bout.nl();
-  if (nSystemNumber) {
-    bout << "Add @" << nSystemNumber << "." << session()->GetNetworkName() << " to subtype " << s << "? ";
+  if (system_number) {
+    bout << "Add @" << system_number << "." << net.name << " to subtype " << subtype << "? ";
   }
-  if (!nSystemNumber || !noyes()) {
+  if (!system_number || !noyes()) {
     bout << "|#2System Number: ";
-    input(s, 5, true);
-    if (!s[0]) {
+    const auto s = input(5, true);
+    if (s.empty()) {
       return;
     }
-    nSystemNumber = atoi(s);
-    if (!valid_system(nSystemNumber)) {
-      bout << "@" << nSystemNumber << " is not a valid system in " << session()->GetNetworkName() <<
-                         ".\r\n\n";
+    system_number = to_number<int>(s);
+    if (!valid_system(system_number)) {
+      bout << "@" << system_number << " is not a valid system in " << net.name << ".\r\n\n";
       return;
     }
   }
-  sprintf(s, "%u\n", nSystemNumber);
-  TextFile hostFile(szNetworkFileName, "a+t");
-  if (hostFile.IsOpen()) {
-    hostFile.Write(s);
-    hostFile.Close();
+  TextFile host_file(fn, "a+t");
+  if (host_file.IsOpen()) {
+    host_file.Write(StringPrintf("%u\n", system_number));
+    host_file.Close();
     // TODO find replacement for autosend.exe
     if (File::Exists("autosend.exe")) {
       bout << "AutoSend starter messages? ";
       if (yesno()) {
-        char szAutoSendCommand[ MAX_PATH ];
-        sprintf(szAutoSendCommand, "AUTOSEND.EXE %s %u .%d", s1, nSystemNumber, session()->GetNetworkNumber());
-        ExecuteExternalProgram(szAutoSendCommand, EFLAG_NONE);
+        const auto autosend = FilePath(a()->bindir(), "autosend");
+        const auto cmd = StrCat(autosend, " ", subtype, " ", system_number, " .", network_number);
+        ExecuteExternalProgram(cmd, EFLAG_NONE);
       }
     }
   }
@@ -272,14 +299,14 @@ void delete_attachment(unsigned long daten, int forceit) {
   filestatusrec fsr;
 
   bool found = false;
-  File fileAttach(syscfg.datadir, ATTACH_DAT);
+  File fileAttach(FilePath(a()->config()->datadir(), ATTACH_DAT));
   if (fileAttach.Open(File::modeBinary | File::modeReadWrite)) {
-    long l = fileAttach.Read(&fsr, sizeof(fsr));
+    auto l = fileAttach.Read(&fsr, sizeof(fsr));
     while (l > 0 && !found) {
       if (daten == (unsigned long) fsr.id) {
         found = true;
         fsr.id  = 0;
-        fileAttach.Seek(static_cast<long>(sizeof(filestatusrec)) * -1L, File::seekCurrent);
+        fileAttach.Seek(static_cast<long>(sizeof(filestatusrec)) * -1L, File::Whence::current);
         fileAttach.Write(&fsr, sizeof(filestatusrec));
         delfile = true;
         if (!forceit) {
@@ -289,10 +316,10 @@ void delete_attachment(unsigned long daten, int forceit) {
           }
         }
         if (delfile) {
-          File::Remove(application()->GetAttachmentDirectory().c_str(), fsr.filename);
+          File::Remove(a()->GetAttachmentDirectory().c_str(), fsr.filename);
         } else {
           bout << "\r\nOrphaned attach " << fsr.filename << " remains in " <<
-                             application()->GetAttachmentDirectory() << wwiv::endl;
+                             a()->GetAttachmentDirectory() << wwiv::endl;
           pausescr();
         }
       } else {
@@ -303,84 +330,90 @@ void delete_attachment(unsigned long daten, int forceit) {
   }
 }
 
+
+static std::string fixup_user_entered_email(const std::string& s) {
+  auto user_input = s;
+  auto at_pos = user_input.find('@');
+  if (at_pos != std::string::npos
+    && at_pos < user_input.size() - 1
+    && isalpha(user_input.at(at_pos + 1))) {
+    if (user_input.find(INTERNET_EMAIL_FAKE_OUTBOUND_ADDRESS) != std::string::npos) {
+      StringLowerCase(&user_input);
+      user_input += INTERNET_EMAIL_FAKE_OUTBOUND_ADDRESS;
+    }
+  }
+  return user_input;
+}
+
 void readmail(int mode) {
-  int i, i1, i2, i3, curmail = 0, tp, nn = 0, delme;
+  int i, i1, i2, curmail = 0, nn = 0, delme;
   bool done, okmail;
-  unsigned short xx;
-  char s[201], s1[205], s2[81], *ss2, mnu[81];
+  char s1[205], s2[81], *ss2, mnu[81];
   mailrec m, m1;
-  postrec p;
   char ch;
-  long len, num_mail, num_mail1;
-  int nUserNumber, nSystemNumber;
+  int num_mail, num_mail1;
+  uint16_t user_number, system_number;
   net_system_list_rec *csne;
   filestatusrec fsr;
   bool attach_exists = false;
   bool found = false;
   long l1;
 
-  emchg = false;
-
+  a()->emchg_ = false;
+  
   bool next = false, abort = false;
-
-  tmpmailrec *mloc = static_cast<tmpmailrec *>(BbsAllocA(MAXMAIL * sizeof(tmpmailrec)));
-  if (!mloc) {
-    bout << "|#6Not enough memory.\r\n";
-    return;
-  }
+  std::vector<tmpmailrec> mloc;
   write_inst(INST_LOC_RMAIL, 0, INST_FLAGS_NONE);
-  slrec ss = getslrec(session()->GetEffectiveSl());
+  slrec sl = a()->effective_slrec();
   int mw = 0;
   {
     unique_ptr<File> pFileEmail(OpenEmailFile(false));
     if (!pFileEmail->IsOpen()) {
       bout << "\r\n\nNo mail file exists!\r\n\n";
-      free(mloc);
       return;
     }
-    int mfl = pFileEmail->GetLength() / sizeof(mailrec);
+    int mfl = pFileEmail->length() / sizeof(mailrec);
     for (i = 0; (i < mfl) && (mw < MAXMAIL); i++) {
-      pFileEmail->Seek(i * sizeof(mailrec), File::seekBegin);
+      pFileEmail->Seek(i * sizeof(mailrec), File::Whence::begin);
       pFileEmail->Read(&m, sizeof(mailrec));
-      if ((m.tosys == 0) && (m.touser == session()->usernum)) {
-        mloc[mw].index = static_cast< short >(i);
-        mloc[mw].fromsys = m.fromsys;
-        mloc[mw].fromuser = m.fromuser;
-        mloc[mw].daten = m.daten;
-        mloc[mw].msg = m.msg;
+      if ((m.tosys == 0) && (m.touser == a()->usernum)) {
+        tmpmailrec r = {};
+        r.index = static_cast<int16_t>(i);
+        r.fromsys = m.fromsys;
+        r.fromuser = m.fromuser;
+        r.daten = m.daten;
+        r.msg = m.msg;
+        mloc.emplace_back(r);
         mw++;
       }
     }
     pFileEmail->Close();
   }
-  session()->user()->SetNumMailWaiting(mw);
-  if (session()->usernum == 1) {
-    fwaiting = mw;
-  }
-  if (mw == 0) {
+  a()->user()->SetNumMailWaiting(mw);
+  if (mloc.empty()) {
     bout << "\r\n\n|#3You have no mail.\r\n\n";
-    free(mloc);
     return;
   }
-  if (mw == 1) {
+  if (mloc.size() == 1) {
     curmail = 0;
   } else {
     bout << "\r\n\n|#7You have mail from:\r\n\n";
 
-    if ((session()->user()->GetScreenChars() >= 80) && session()->mail_who_field_len) {
+    if ((a()->user()->GetScreenChars() >= 80) && a()->mail_who_field_len) {
       if (okansi()) {
         strcpy(s1, "\xC1\xC2\xC4");
       } else {
         strcpy(s1, "++-");
       }
-      sprintf(s, "|#7%s%c", charstr(4, s1[2]), s1[1]);
-      strcat(s, charstr(session()->mail_who_field_len - 4, s1[2]));
-      strcat(s, charstr(1, s1[1]));
-      strcat(s, charstr(session()->user()->GetScreenChars() - session()->mail_who_field_len - 3, s1[2]));
-      pla(s, &abort);
+      std::ostringstream ss;
+      ss << "|#7" << std::string(4, s1[2]) << s1[1]
+         << std::string(a()->mail_who_field_len - 4, s1[2])
+         << std::string(1, s1[1])
+         << std::string(a()->user()->GetScreenChars() - a()->mail_who_field_len - 3, s1[2]);
+      bout.bpla(ss.str(), &abort);
     }
     for (i = 0; (i < mw && !abort); i++) {
-      if (!read_same_email(mloc, mw, i, &m, 0, 0)) {
+      if (!read_same_email(mloc, mw, i, m, 0, 0)) {
         continue;
       }
       if (mode == 1 && (m.status & status_seen)) {
@@ -388,34 +421,22 @@ void readmail(int mode) {
         continue;
       }
 
-      tp = 80;
-      if (m.status & status_source_verified) {
-        tp -= 2;
-      }
-      if (m.status & status_new_net) {
-        tp -= 1;
-        if (static_cast< int >(strlen(m.title)) <= tp) {
-          nn = static_cast< unsigned char >(m.title[tp + 1]);
-        } else {
-          nn = 0;
-        }
-      } else {
-        nn = 0;
-      }
-      sprintf(s, "|#2%3d%s|#7%c|#1 ", i + 1, m.status & status_seen ? " " : "|#3*", okansi() ? '\xB3' : '|');
+      nn = network_number_from(&m);
+      std::ostringstream ss(std::ostringstream::ate);
+      ss << "|#2" << StringPrintf("%3d", i + 1)
+         << (m.status & status_seen ? " " : "|#3*")
+         << (okansi() ? '\xB3' : '|') << "|#1 ";
 
-      if ((m.anony & anony_sender) && ((ss.ability & ability_read_email_anony) == 0)) {
-        strcat(s, ">UNKNOWN<");
+      if ((m.anony & anony_sender) && ((sl.ability & ability_read_email_anony) == 0)) {
+        ss << ">UNKNOWN<";
       } else {
         if (m.fromsys == 0) {
           if (m.fromuser == 65535) {
             if (nn != 255) {
-              strcat(s, net_networks[nn].name);
+              ss << a()->net_networks[nn].name;
             }
           } else {
-            WUser u;
-            application()->users()->ReadUser(&u, m.fromuser);
-            strcat(s, u.GetUserNameAndNumber(m.fromuser));
+            ss << a()->names()->UserName(m.fromuser);
           }
         } else {
           set_net_num(nn);
@@ -429,72 +450,74 @@ void readmail(int mode) {
           if (nn == 255) {
             sprintf(s1, "#%u @%u.%s", m.fromuser, m.fromsys, "<deleted network>");
           } else {
-            unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
-            if (b) {
-              strncpy(s2, b.get(), sizeof(s2) - 1);
+            string b;
+            if (readfile(&(m.msg), "email", &b)) {
+              // we know b is much bigger than s2, so don't
+              // use to_char_array
+              strncpy(s2, b.c_str(), sizeof(s2) - 1);
               ss2 = strtok(s2, "\r");
-              if (m.fromsys == 32767) {
+              if (m.fromsys == INTERNET_EMAIL_FAKE_OUTBOUND_NODE || m.fromsys == FTN_FAKE_OUTBOUND_NODE) {
                 sprintf(s1, "%s", stripcolors(ss2));
               } else {
                 sprintf(s1, "%s %u@%u.%s (%s)",
                         stripcolors(strip_to_node(ss2).c_str()),
                         m.fromuser,
                         m.fromsys,
-                        net_networks[nn].name,
+                        a()->net_networks[nn].name,
                         system_name.c_str());
               }
-              if (strlen(s1) > session()->mail_who_field_len) {
-                s1[ session()->mail_who_field_len ] = '\0';
+              if (strlen(s1) > a()->mail_who_field_len) {
+                s1[ a()->mail_who_field_len ] = '\0';
               }
             } else {
-              if (session()->GetMaxNetworkNumber() > 1) {
-                sprintf(s1, "#%u @%u.%s (%s)", m.fromuser, m.fromsys, net_networks[nn].name, system_name.c_str());
+              if (wwiv::stl::size_int(a()->net_networks) > 1) {
+                sprintf(s1, "#%u @%u.%s (%s)", m.fromuser, m.fromsys, a()->net_networks[nn].name, system_name.c_str());
               } else {
                 sprintf(s1, "#%u @%u (%s)", m.fromuser, m.fromsys, system_name.c_str());
               }
             }
           }
-          strcat(s, s1);
+          ss << s1;
         }
       }
-
-      if (session()->user()->GetScreenChars() >= 80 && session()->mail_who_field_len) {
-        if (strlen(stripcolors(s)) > session()->mail_who_field_len) {
-          while (strlen(stripcolors(s)) > session()->mail_who_field_len) {
-            s[ strlen(s) - 1 ] = '\0';
-          }
+      
+      if (a()->user()->GetScreenChars() >= 80 && a()->mail_who_field_len) {
+        const auto current_s = ss.str();
+        if (size_without_colors(current_s) > a()->mail_who_field_len) {
+          // resize ss to trim it since it's larger than mail_who_field_len
+          trim_to_size_ignore_colors(current_s, a()->mail_who_field_len);
+          ss.str(current_s);
         }
-        strcat(s, charstr((session()->mail_who_field_len + 1) - strlen(stripcolors(s)), ' '));
+        int siz = a()->mail_who_field_len + 1 - size_without_colors(current_s);
+        ss << std::string(std::max(0, siz), ' ');
         if (okansi()) {
-          strcat(s, "|#7\xB3|#1");
+          ss << "|#7\xB3|#1";
         } else {
-          strcat(s, "|");
+          ss << "|";
         }
-        strcat(s, " ");
-        strcat(s, stripcolors(m.title));
-        while (wwiv::strings::GetStringLength(stripcolors(s)) > session()->user()->GetScreenChars() - 1) {
-          s[strlen(s) - 1] = '\0';
-        }
+        ss << " " << stripcolors(m.title);
       }
-      pla(s, &abort);
-      if ((i == (mw - 1)) && (session()->user()->GetScreenChars() >= 80) && (!abort)
-          && (session()->mail_who_field_len)) {
+      const auto current_line = trim_to_size_ignore_colors(ss.str(), a()->user()->GetScreenChars() - 1);
+      bout.bpla(current_line, &abort);
+
+      if ((i == (mw - 1)) && (a()->user()->GetScreenChars() >= 80) && (!abort)
+          && (a()->mail_who_field_len)) {
         (okansi()) ? strcpy(s1, "\xC1\xC3\xC4") : strcpy(s1, "++-");
-        sprintf(s, "|#7%s%c", charstr(4, s1[2]), s1[0]);
-        strcat(s, charstr(session()->mail_who_field_len - 4, s1[2]));
-        strcat(s, charstr(1, s1[0]));
-        strcat(s, charstr(session()->user()->GetScreenChars() - session()->mail_who_field_len - 3, s1[2]));
-        pla(s, &abort);
+        std::ostringstream ss;
+        ss << "|#7" << std::string(4, s1[2]) << s1[0];
+        ss << std::string(a()->mail_who_field_len - 4, s1[2]);
+        ss << std::string(1, s1[0]);
+        ss << std::string(a()->user()->GetScreenChars() - a()->mail_who_field_len - 3, s1[2]);
+        bout.bpla(ss.str(), &abort);
       }
     }
     bout.nl();
     bout << "|#9(|#2Q|#9=|#2Quit|#9, |#2Enter|#9=|#2First Message|#9) \r\n|#9Enter message number: ";
-    input(s, 3, true);
-    if (strchr(s, 'Q') != nullptr) {
-      free(mloc);
+    auto user_selection = input(3, true);
+    if (contains(user_selection, 'Q')) {
       return;
     }
-    i = atoi(s);
+    i = to_number<int>(user_selection);
     if (i) {
       if (!mode) {
         if (i <= mw) {
@@ -510,62 +533,39 @@ void readmail(int mode) {
   do {
     abort = false;
     bout.nl(2);
-    sprintf(s, "|#9Msg|#7:  [|#2%u|#7/|#2%d|#7] |#%dE-Mail\r\n", curmail + 1, mw, session()->GetMessageColor());
-    osan(s, &abort, &next);
-    sprintf(s, "|#9Subj|#7: ");
-    osan(s, &abort, &next);
     next = false;
-    bout.Color(session()->GetMessageColor());
-    s[0] = '\0';
+    string title = m.title;
 
-    if (!read_same_email(mloc, mw, curmail, &m, 0, 0)) {
-      strcat(s, ">>> MAIL DELETED <<<");
+    if (!read_same_email(mloc, mw, curmail, m, 0, 0)) {
+      title += ">>> MAIL DELETED <<<";
       okmail = false;
-      bout << s;
       bout.nl(3);
     } else {
-      strcat(s, m.title);
-      strcpy(irt, m.title);
-      irt_name[0] = '\0';
+      strcpy(a()->context().irt_, m.title);
       abort = false;
-      i = ((ability_read_email_anony & ss.ability) != 0);
+      i = ((ability_read_email_anony & sl.ability) != 0);
       okmail = true;
-      pla(s, &abort);
       if (m.fromsys && !m.fromuser) {
-        grab_user_name(&(m.msg), "email");
+        grab_user_name(&(m.msg), "email", network_number_from(&m));
       } else {
-        net_email_name[0] = '\0';
+        a()->net_email_name.clear();
       }
-      tp = 80;
       if (m.status & status_source_verified) {
-        tp -= 2;
-        if (static_cast<int>(strlen(m.title)) <= tp) {
-          xx = *(short *)(m.title + tp + 1);
-          strcpy(s, "-=> Source Verified Type ");
-          sprintf(s + strlen(s), "%u", xx);
-          if (xx == 1) {
-            strcat(s, " (From NC)");
-          } else if (xx > 256 && xx < 512) {
-            strcpy(s2, " (From GC-");
-            sprintf(s2 + strlen(s2), "%d)", xx - 256);
-            strcat(s, s2);
+        int sv_type = source_verfied_type(&m);
+        if (sv_type > 0) {
+          title += StrCat("-=> Source Verified Type ", sv_type);
+          if (sv_type == 1) {
+            title += " (From NC)";
+          } else if (sv_type > 256 && sv_type < 512) {
+            title += StrCat(" (From GC-", sv_type - 256, ")");
           }
         } else {
-          strcpy(s, "-=> Source Verified (unknown type)");
-        }
-        if (!abort) {
-          bout.Color(4);
-          pla(s, &abort);
+          title += "-=> Source Verified (unknown type)";
         }
       }
-      nn = 0;
-      if (m.status & status_new_net) {
-        tp -= 1;
-        if (static_cast<int>(strlen(m.title)) <= tp) {
-          nn = m.title[ tp + 1 ];
-        }
-      }
+      nn = network_number_from(&m);
       set_net_num(nn);
+      const auto& net = a()->net_networks[nn];
       int nFromSystem = 0;
       int nFromUser = 0;
       if (nn != 255) {
@@ -573,22 +573,39 @@ void readmail(int mode) {
         nFromUser = m.fromuser;
       }
       if (!abort) {
-        read_message1(&m.msg, (m.anony & 0x0f), (i) ? true : false, &next, "email", nFromSystem, nFromUser);
+        // read_type2_message will parse out the title and other fields of the
+        // message, including sender name (which is all we have for FTN messages).
+        // We need to get the full header before that and pass it into this
+        // method to display it.
+        auto msg = read_type2_message(&m.msg, (m.anony & 0x0f), (i) ? true : false, "email", nFromSystem, nFromUser);
+        msg.message_area = "Personal E-Mail";
+        msg.title = m.title;
+        msg.message_number = curmail + 1;
+        msg.total_messages = mw;
+        // We set this to false since we do *not* want to use the
+        // command handling from the full screen reader.
+        msg.use_msg_command_handler = false;
+        if (a()->current_net().type == network_type_t::ftn) {
+          // Set email name to be the to address.
+          // This is also done above in grab_user_name, but we should stop using
+          // a()->net_email_name
+          a()->net_email_name = msg.from_user_name;
+        }
+        display_type2_message(msg, &next);
         if (!(m.status & status_seen)) {
-          read_same_email(mloc, mw, curmail, &m, 0, status_seen);
+          read_same_email(mloc, mw, curmail, m, 0, status_seen);
         }
       }
       found = false;
       attach_exists = false;
       if (m.status & status_file) {
-        File fileAttach(syscfg.datadir, ATTACH_DAT);
+        File fileAttach(FilePath(a()->config()->datadir(), ATTACH_DAT));
         if (fileAttach.Open(File::modeBinary | File::modeReadOnly)) {
           l1 = fileAttach.Read(&fsr, sizeof(fsr));
           while (l1 > 0 && !found) {
-            if (m.daten == static_cast<unsigned long>(fsr.id)) {
+            if (m.daten == static_cast<uint32_t>(fsr.id)) {
               found = true;
-              sprintf(s, "%s%s", application()->GetAttachmentDirectory().c_str(), fsr.filename);
-              if (File::Exists(s)) {
+              if (File::Exists(a()->GetAttachmentDirectory(), fsr.filename)) {
                 bout << "'T' to download attached file \"" << fsr.filename << "\" (" << fsr.numbytes << " bytes).\r\n";
                 attach_exists = true;
               } else {
@@ -610,82 +627,88 @@ void readmail(int mode) {
     }
 
     do {
+      string allowable;
       write_inst(INST_LOC_RMAIL, 0, INST_FLAGS_NONE);
       set_net_num(nn);
+      const auto& net = a()->net_networks[nn];
       i1 = 1;
-      irt_name[0] = '\0';
-      if (!application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+      if (!a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
         strcpy(mnu, EMAIL_NOEXT);
         bout << "|#2Mail {?} : ";
       }
       if (so()) {
         strcpy(mnu, SY_EMAIL_NOEXT);
-        if (application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+        if (a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
           bout << "|#2Mail |#7{|#1QSRIDAF?-+GEMZPVUOLCNY@|#7} |#2: ";
         }
-        strcpy(s, "QSRIDAF?-+GEMZPVUOLCNY@");
+        allowable = "QSRIDAF?-+GEMZPVUOLCNY@";
       } else {
         if (cs()) {
           strcpy(mnu, CS_EMAIL_NOEXT);
-          if (application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+          if (a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
             bout << "|#2Mail |#7{|#1QSRIDAF?-+GZPVUOCY@|#7} |#2: ";
           }
-          strcpy(s, "QSRIDAF?-+GZPVUOCY@");
+          allowable = "QSRIDAF?-+GZPVUOCY@";
         } else {
           if (!okmail) {
             strcpy(mnu, RS_EMAIL_NOEXT);
-            if (application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+            if (a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
               bout << "|#2Mail |#7{|#1QI?-+GY|#7} |#2: ";
             }
-            strcpy(s, "QI?-+G");
+            allowable = "QI?-+G";
           } else {
             strcpy(mnu, EMAIL_NOEXT);
-            if (application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+            if (a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
               bout << "|#2Mail |#7{|#1QSRIDAF?+-GY@|#7} |#2: ";
             }
-            strcpy(s, "QSRIDAF?-+GY@");
+            allowable = "QSRIDAF?-+GY@";
           }
         }
       }
       if ((m.status & status_file) && found && attach_exists) {
-        if (application()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
+        if (a()->HasConfigFlag(OP_FLAGS_MAIL_PROMPT)) {
           bout << "\b\b|#7{|#1T|#7} |#2: |#0";
         }
-        strcat(s, "T");
+        allowable += "T";
       }
-      ch = onek(s);
-      if (okmail && !read_same_email(mloc, mw, curmail, &m, 0, 0)) {
+      ch = onek(allowable);
+      if (okmail && !read_same_email(mloc, mw, curmail, m, 0, 0)) {
         bout << "\r\nMail got deleted.\r\n\n";
         ch = 'R';
       }
       delme = 0;
       switch (ch) {
       case 'T':
+      {
         bout.nl();
-        sprintf(s1, "%s%s", application()->GetAttachmentDirectory().c_str(), fsr.filename);
+        auto fn = FilePath(a()->GetAttachmentDirectory(), fsr.filename);
         bool sentt;
         bool abortt;
-        send_file(s1, &sentt, &abortt, fsr.filename, -1, fsr.numbytes);
+        send_file(fn, &sentt, &abortt, fsr.filename, -1, fsr.numbytes);
         if (sentt) {
           bout << "\r\nAttached file sent.\r\n";
-          sysoplogf("Downloaded %ldk of attached file %s.", (fsr.numbytes + 1023) / 1024, fsr.filename);
-        } else {
+          sysoplog() << StringPrintf("Downloaded %ldk of attached file %s.", (fsr.numbytes + 1023) / 1024, fsr.filename);
+        }
+        else {
           bout << "\r\nAttached file not completely sent.\r\n";
-          sysoplogf("Tried to download attached file %s.", fsr.filename);
+          sysoplog() << StringPrintf("Tried to download attached file %s.", fsr.filename);
         }
         bout.nl();
-        break;
+      } break;
       case 'N':
         if (m.fromuser == 1) {
-          add_netsubscriber(m.fromsys);
-        } else {
-          add_netsubscriber(0);
+          add_netsubscriber(net, nn, m.fromsys);
+        }
+        else {
+          add_netsubscriber(net, nn, 0);
         }
         break;
       case 'E':
         if (so() && okmail) {
-          unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
-          extract_out(b.get(), len, m.title, m.daten);
+          string b;
+          if (readfile(&(m.msg), "email", &b)) {
+            extract_out(&b[0], b.length(), m.title);
+          }
         }
         i1 = 0;
         break;
@@ -693,70 +716,77 @@ void readmail(int mode) {
         done = true;
         break;
       case 'O':
+      {
         if (cs() && okmail && m.fromuser != 65535 && nn != 255) {
-          show_files("*.frm", syscfg.gfilesdir);
+          show_files("*.frm", a()->config()->gfilesdir().c_str());
           bout << "|#2Which form letter: ";
-          input(s, 8, true);
-          if (!s[0]) {
+          auto user_input = input(8, true);
+          if (user_input.empty()) {
             break;
           }
-          sprintf(s1, "%s%s.frm", syscfg.gfilesdir, s);
-          if (!File::Exists(s1)) {
-            sprintf(s1, "%sform%s.msg", syscfg.gfilesdir, s);
+          auto fn = FilePath(a()->config()->gfilesdir(), StrCat(user_input, ".frm"));
+          if (!File::Exists(fn)) {
+            fn = FilePath(a()->config()->gfilesdir(), StrCat("form", user_input, ".msg"));
           }
-          if (File::Exists(s1)) {
-            LoadFileIntoWorkspace(s1, true);
-            num_mail =  static_cast<long>(session()->user()->GetNumFeedbackSent()) +
-                        static_cast<long>(session()->user()->GetNumEmailSent()) +
-                        static_cast<long>(session()->user()->GetNumNetEmailSent());
-            grab_quotes(nullptr, nullptr);
+          if (File::Exists(fn)) {
+            LoadFileIntoWorkspace(fn, true);
+            num_mail = a()->user()->GetNumFeedbackSent() +
+              a()->user()->GetNumEmailSent() +
+              a()->user()->GetNumNetEmailSent();
+            clear_quotes();
             if (m.fromuser != 65535) {
-              email(m.fromuser, m.fromsys, false, m.anony);
+              email(m.title, m.fromuser, m.fromsys, false, m.anony);
             }
-            num_mail1 = static_cast<long>(session()->user()->GetNumFeedbackSent()) +
-                        static_cast<long>(session()->user()->GetNumEmailSent()) +
-                        static_cast<long>(session()->user()->GetNumNetEmailSent());
+            num_mail1 = static_cast<long>(a()->user()->GetNumFeedbackSent()) +
+              static_cast<long>(a()->user()->GetNumEmailSent()) +
+              static_cast<long>(a()->user()->GetNumNetEmailSent());
             if (num_mail != num_mail1) {
+              const string userandnet = a()->names()->UserName(a()->usernum, a()->current_net().sysnum);
+              string msg;
               if (m.fromsys != 0) {
-                sprintf(s, "%s: %s", session()->GetNetworkName(),
-                        session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum));
-              } else {
-                strcpy(s, session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum));
+                msg = StrCat(a()->network_name(), ": ", userandnet);
+              }
+              else {
+                msg = userandnet;
               }
               if (m.anony & anony_receiver) {
-                strcpy(s, ">UNKNOWN<");
+                msg += ">UNKNOWN<";
               }
-              strcat(s, " read your mail on ");
-              strcat(s, fulldate());
+              msg += " read your mail on ";
+              msg += fulldate();
               if (!(m.status & status_source_verified)) {
-                ssm(m.fromuser, m.fromsys, s);
+                ssm(m.fromuser, m.fromsys, &net) << msg;
               }
-              read_same_email(mloc, mw, curmail, &m, 1, 0);
+              read_same_email(mloc, mw, curmail, m, 1, 0);
               ++curmail;
               if (curmail >= mw) {
                 done = true;
               }
-            } else {
-              // need instance
-              File::Remove(syscfgovr.tempdir, INPUT_MSG);
             }
-          } else {
+            else {
+              // need instance
+              File::Remove(FilePath(a()->temp_directory(), INPUT_MSG));
+            }
+          }
+          else {
             bout << "\r\nFile not found.\r\n\n";
             i1 = 0;
           }
         }
-        break;
+      } break;
       case 'G':
+      {
         bout << "|#2Go to which (1-" << mw << ") ? |#0";
-        input(s, 3);
-        i1 = atoi(s);
+        auto user_input = input(3);
+        i1 = to_number<int>(user_input);
         if (i1 > 0 && i1 <= mw) {
           curmail = i1 - 1;
           i1 = 1;
-        } else {
+        }
+        else {
           i1 = 0;
         }
-        break;
+      } break;
       case 'I':
       case '+':
         ++curmail;
@@ -780,66 +810,69 @@ void readmail(int mode) {
           break;
         }
         if (so()) {
-          if (!session()->IsUserOnline()) {
-            session()->SetCurrentMessageArea(0);
-            session()->SetCurrentReadMessageArea(0);
-            session()->SetCurrentConferenceMessageArea(0);
+          if (!a()->IsUserOnline()) {
+            a()->set_current_user_sub_num(0);
+            a()->SetCurrentReadMessageArea(0);
+            a()->SetCurrentConferenceMessageArea(0);
           }
           tmp_disable_conf(true);
           bout.nl();
-          char *ss1;
+          string ss1;
           do {
             bout << "|#2Move to which sub? ";
-            ss1 = mmkey(0);
+            ss1 = mmkey(MMKeyAreaType::subs);
             if (ss1[0] == '?') {
               old_sublist();
             }
-          } while ((!hangup) && (ss1[0] == '?'));
+          } while ((!a()->hangup_) && (ss1[0] == '?'));
           i = -1;
-          if ((ss1[0] == 0) || hangup) {
+          if ((ss1[0] == 0) || a()->hangup_) {
             i1 = 0;
             bout.nl();
             tmp_disable_conf(false);
             break;
           }
-          for (i1 = 0; (i1 < session()->num_subs) && (usub[i1].subnum != -1); i1++) {
-            if (wwiv::strings::IsEquals(usub[i1].keys, ss1)) {
+          for (i1 = 0; (i1 < size_int(a()->subs().subs()))
+            && (a()->usub[i1].subnum != -1); i1++) {
+            if (ss1 == a()->usub[i1].keys) {
               i = i1;
             }
           }
           if (i != -1) {
-            if (session()->GetEffectiveSl() < subboards[usub[i].subnum].postsl) {
+            if (a()->effective_sl() < a()->subs().sub(a()->usub[i].subnum).postsl) {
               bout << "\r\nSorry, you don't have post access on that sub.\r\n\n";
               i = -1;
             }
           }
           if (i != -1) {
-            unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
+            string b;
+            readfile(&(m.msg), "email", &b);
 
+            postrec p{};
             strcpy(p.title, m.title);
             p.anony = m.anony;
             p.ownersys = m.fromsys;
-            session()->SetNumMessagesInCurrentMessageArea(p.owneruser);
-            p.owneruser = static_cast< unsigned short >(session()->usernum);
+            a()->SetNumMessagesInCurrentMessageArea(p.owneruser);
+            p.owneruser = static_cast<uint16_t>(a()->usernum);
             p.msg = m.msg;
             p.daten = m.daten;
             p.status = 0;
 
             iscan(i);
             open_sub(true);
-            if (xsubs[session()->GetCurrentReadMessageArea()].num_nets) {
+            if (!a()->current_sub().nets.empty()) {
               p.status |= status_pending_net;
             }
-            p.msg.storage_type = (uint8_t) subboards[session()->GetCurrentReadMessageArea()].storage_type;
-            savefile(b.get(), len, &(p.msg), subboards[session()->GetCurrentReadMessageArea()].filename);
-            WStatus* pStatus = application()->GetStatusManager()->BeginTransaction();
-            p.qscan = pStatus->IncrementQScanPointer();
-            application()->GetStatusManager()->CommitTransaction(pStatus);
-            if (session()->GetNumMessagesInCurrentMessageArea() >=
-                subboards[session()->GetCurrentReadMessageArea()].maxmsgs) {
+            p.msg.storage_type = (uint8_t)a()->current_sub().storage_type;
+            savefile(b, &(p.msg), a()->current_sub().filename);
+            auto status = a()->status_manager()->BeginTransaction();
+            p.qscan = status->IncrementQScanPointer();
+            a()->status_manager()->CommitTransaction(std::move(status));
+            if (a()->GetNumMessagesInCurrentMessageArea() >=
+              a()->current_sub().maxmsgs) {
               i1 = 1;
               i2 = 0;
-              while (i2 == 0 && i1 <= session()->GetNumMessagesInCurrentMessageArea()) {
+              while (i2 == 0 && i1 <= a()->GetNumMessagesInCurrentMessageArea()) {
                 if ((get_post(i1)->status & status_no_delete) == 0) {
                   i2 = i1;
                 }
@@ -851,18 +884,19 @@ void readmail(int mode) {
               delete_message(i2);
             }
             add_post(&p);
-            pStatus = application()->GetStatusManager()->BeginTransaction();
-            pStatus->IncrementNumMessagesPostedToday();
-            pStatus->IncrementNumLocalPosts();
-            application()->GetStatusManager()->CommitTransaction(pStatus);
+            status = a()->status_manager()->BeginTransaction();
+            status->IncrementNumMessagesPostedToday();
+            status->IncrementNumLocalPosts();
+            a()->status_manager()->CommitTransaction(std::move(status));
             close_sub();
             tmp_disable_conf(false);
-            iscan(session()->GetCurrentMessageArea());
+            iscan(a()->current_user_sub_num());
             bout << "\r\n\n|#9Message moved.\r\n\n";
-            int nTempNumMsgs = session()->GetNumMessagesInCurrentMessageArea();
+            int nTempNumMsgs = a()->GetNumMessagesInCurrentMessageArea();
             resynch(&nTempNumMsgs, &p);
-            session()->SetNumMessagesInCurrentMessageArea(nTempNumMsgs);
-          } else {
+            a()->SetNumMessagesInCurrentMessageArea(nTempNumMsgs);
+          }
+          else {
             tmp_disable_conf(false);
           }
         }
@@ -876,11 +910,11 @@ void readmail(int mode) {
           break;
         }
         if (m.fromsys != 0) {
-          message = session()->GetNetworkName();
-          message += ": ";
-          message += session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum);
-        } else {
-          message = session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum);
+          message = StrCat(a()->network_name(), ": ",
+            a()->names()->UserName(a()->usernum, a()->current_net().sysnum));
+        }
+        else {
+          message = a()->names()->UserName(a()->usernum, a()->current_net().sysnum);
         }
 
         if (m.anony & anony_receiver) {
@@ -890,14 +924,14 @@ void readmail(int mode) {
         message += " read your mail on ";
         message += fulldate();
         if (!(m.status & status_source_verified) && nn != 255) {
-          ssm(m.fromuser, m.fromsys, message.c_str());
+          ssm(m.fromuser, m.fromsys, &net) << message;
         }
       }
       case 'Z':
         if (!okmail) {
           break;
         }
-        read_same_email(mloc, mw, curmail, &m, 1, 0);
+        read_same_email(mloc, mw, curmail, m, 1, 0);
         ++curmail;
         if (curmail >= mw) {
           done = true;
@@ -911,12 +945,13 @@ void readmail(int mode) {
         if (!okmail) {
           break;
         }
-        purgemail(mloc, mw, &curmail, &m, &ss);
+        purgemail(mloc, mw, &curmail, &m, &sl);
         if (curmail >= mw) {
           done = true;
         }
         break;
       case 'F':
+      {
         if (!okmail) {
           break;
         }
@@ -925,64 +960,57 @@ void readmail(int mode) {
           break;
         }
         bout.nl(2);
-        if (okfsed() && session()->user()->IsUseAutoQuote()) {
-          unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
-          auto_quote(b.get(), len, 4, m.daten);
-          send_email();
+        if (okfsed() && a()->user()->IsUseAutoQuote()) {
+          string b;
+          // TODO: optimize this since we also call readfile in grab_user_name
+          auto reply_to_name = grab_user_name(&(m.msg), "email", network_number_from(&m));
+          if (readfile(&(m.msg), "email", &b)) {
+            auto_quote(&b[0], reply_to_name, b.size(), 4, m.daten);
+            send_email();
+          }
           break;
         }
 
         bout << "|#2Forward to: ";
-        input(s, 75);
-        if (((i3 = strcspn(s, "@")) != (wwiv::strings::GetStringLength(s))) && (isalpha(s[i3 + 1]))) {
-          if (strstr(s, "@32767") == nullptr) {
-            strlwr(s1);
-            strcat(s, " @32767");
-          }
-        }
-        parse_email_info(s, &nUserNumber, &nSystemNumber);
-        if (nUserNumber || nSystemNumber) {
-          if (ForwardMessage(&nUserNumber, &nSystemNumber)) {
+        auto user_input = fixup_user_entered_email(input(75));
+        parse_email_info(user_input, &user_number, &system_number);
+        if (user_number || system_number) {
+          if (ForwardMessage(&user_number, &system_number)) {
             bout << "Mail forwarded.\r\n";
           }
-          if ((nUserNumber == session()->usernum) && (nSystemNumber == 0) && (!cs())) {
+          if ((user_number == a()->usernum) && (system_number == 0) && (!cs())) {
             bout << "Can't forward to yourself.\r\n";
-            nUserNumber = 0;
+            user_number = 0;
           }
-          if (nUserNumber || nSystemNumber) {
-            if (nSystemNumber) {
-              if (nSystemNumber == 1 && nUserNumber == 0 &&
-                  wwiv::strings::IsEqualsIgnoreCase(session()->GetNetworkName(), "Internet")) {
-                strcpy(s1, net_email_name);
-              } else if (session()->GetMaxNetworkNumber() > 1) {
-                if (nUserNumber) {
-                  sprintf(s1, "#%d @%d.%s", nUserNumber, nSystemNumber, session()->GetNetworkName());
-                } else {
-                  sprintf(s1, "%s @%d.%s", net_email_name, nSystemNumber, session()->GetNetworkName());
-                }
-              } else {
-                if (nUserNumber) {
-                  sprintf(s1, "#%d @%d", nUserNumber, nSystemNumber);
-                } else {
-                  sprintf(s1, "%s @%d", net_email_name, nSystemNumber);
-                }
+          if (user_number || system_number) {
+            if (system_number) {
+              if (system_number == 1 && user_number == 0 &&
+                a()->current_net().type == network_type_t::internet) {
+                strcpy(s1, a()->net_email_name.c_str());
               }
-            } else {
-              set_net_num(nn);
-              WUser u;
-              application()->users()->ReadUser(&u, nUserNumber);
-              strcpy(s1, u.GetUserNameNumberAndSystem(nUserNumber, net_sysnum));
+              else {
+                std::string netname =
+                    (wwiv::stl::size_int(a()->net_networks) > 1) ? a()->network_name() : "";
+                to_char_array(s1, username_system_net_as_string(user_number, a()->net_email_name,
+                                                                system_number, netname));
+              }
             }
-            if (ok_to_mail(nUserNumber, nSystemNumber, false)) {
+            else {
+              set_net_num(nn);
+              const auto& net = a()->net_networks[nn];
+              const string name = a()->names()->UserName(user_number, a()->current_net().sysnum);
+              strcpy(s1, name.c_str());
+            }
+            if (ok_to_mail(user_number, system_number, false)) {
               bout << "|#5Forward to " << s1 << "? ";
               if (yesno()) {
                 unique_ptr<File> pFileEmail(OpenEmailFile(true));
                 if (!pFileEmail->IsOpen()) {
                   break;
                 }
-                pFileEmail->Seek(mloc[curmail].index * sizeof(mailrec), File::seekBegin);
+                pFileEmail->Seek(mloc[curmail].index * sizeof(mailrec), File::Whence::begin);
                 pFileEmail->Read(&m, sizeof(mailrec));
-                if (!same_email(mloc + curmail, &m)) {
+                if (!same_email(mloc[curmail], m)) {
                   bout << "Error, mail moved.\r\n";
                   break;
                 }
@@ -997,112 +1025,122 @@ void readmail(int mode) {
                   m1.daten = 0xffffffff;
                   m1.msg.storage_type = 0;
                   m1.msg.stored_as = 0xffffffff;
-                  pFileEmail->Seek(mloc[curmail].index * sizeof(mailrec), File::seekBegin);
+                  pFileEmail->Seek(mloc[curmail].index * sizeof(mailrec), File::Whence::begin);
                   pFileEmail->Write(&m1, sizeof(mailrec));
-                } else {
-                  unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
-                  savefile(b.get(), len, &(m.msg), "email");
+                }
+                else {
+                  string b;
+                  if (readfile(&(m.msg), "email", &b)) {
+                    savefile(b, &(m.msg), "email");
+                  }
                 }
                 m.status |= status_forwarded;
                 m.status |= status_seen;
                 pFileEmail->Close();
 
-                i = session()->GetNetworkNumber();
-                sprintf(s, "\r\nForwarded to %s from %s.", s1,
-                        session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum));
+                i = a()->net_num();
+                const string fwd_name = a()->names()->UserName(a()->usernum, a()->current_net().sysnum);
+                auto s = StringPrintf("\r\nForwarded to %s from %s.", s1, fwd_name.c_str());
 
                 set_net_num(nn);
+                const auto& net = a()->net_networks[nn];
                 lineadd(&m.msg, s, "email");
-                sprintf(s, "%s %s %s", session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum),
-                        "forwarded your mail to", s1);
+                s = StrCat(fwd_name, "forwarded your mail to", s1);
                 if (!(m.status & status_source_verified)) {
-                  ssm(m.fromuser, m.fromsys, s);
+                  ssm(m.fromuser, m.fromsys, &net) << s;
                 }
                 set_net_num(i);
-                sprintf(s, "Forwarded mail to %s", s1);
+                s = StrCat("Forwarded mail to ", s1);
                 if (delme) {
-                  session()->user()->SetNumMailWaiting(session()->user()->GetNumMailWaiting() - 1);
-                  if (session()->usernum == 1) {
-                    --fwaiting;
-                  }
+                  a()->user()->SetNumMailWaiting(a()->user()->GetNumMailWaiting() - 1);
                 }
                 bout << "Forwarding: ";
-                if (nn != 255 && nn == session()->GetNetworkNumber()) {
-                  sendout_email(m.title, &m.msg, m.anony,
-                                nUserNumber, nSystemNumber,
-                                1, m.fromuser,
-                                m.fromsys ? m.fromsys :
-                                net_networks[nn].sysnum, delme, nn);
-                } else {
-                  sendout_email(m.title, &m.msg, m.anony, nUserNumber, nSystemNumber, 1,
-                                session()->usernum, net_sysnum, delme, session()->GetNetworkNumber());
+                ::EmailData email;
+                email.title = m.title;
+                email.msg = &m.msg;
+                email.anony = m.anony;
+                email.user_number = user_number;
+                email.system_number = system_number;
+                email.an = true;
+                email.forwarded_code = delme;  // this looks totally wrong to me...
+                email.silent_mode = false;
+
+                if (nn != 255 && nn == a()->net_num()) {
+                  email.from_user = m.fromuser;
+                  email.from_system = m.fromsys ? m.fromsys : a()->net_networks[nn].sysnum;
+                  email.from_network_number = nn;
+                  sendout_email(email);
+                }
+                else {
+                  email.from_user = a()->usernum;
+                  email.from_system = a()->current_net().sysnum;
+                  email.from_network_number = a()->net_num();
+                  sendout_email(email);
                 }
                 ++curmail;
                 if (curmail >= mw) {
                   done = true;
                 }
-                mailcheck = true;
               }
             }
           }
         }
         delme = 0;
-        break;
+      } break;
       case 'A':
       case 'S':
-      case '@':
+      case '@': {
         if (!okmail) {
           break;
         }
-        num_mail = static_cast<long>(session()->user()->GetNumFeedbackSent()) +
-                   static_cast<long>(session()->user()->GetNumEmailSent()) +
-                   static_cast<long>(session()->user()->GetNumNetEmailSent());
+        string reply_to_name;
+        num_mail = static_cast<long>(a()->user()->GetNumFeedbackSent()) +
+          static_cast<long>(a()->user()->GetNumEmailSent()) +
+          static_cast<long>(a()->user()->GetNumNetEmailSent());
         if (nn == 255) {
           bout << "|#6Deleted network.\r\n";
           i1 = 0;
           break;
-        } else if (m.fromuser != 65535) {
-          if (okfsed() && session()->user()->IsUseAutoQuote()) {
-            unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
-            if (s[0] == '@') {
-              auto_quote(b.get(), len, 1, m.daten);
-            } else {
-              auto_quote(b.get(), len, 2, m.daten);
-            }
+        }
+        else if (m.fromuser != 65535) {
+          // TODO: optimize this since we also call readfile in grab_user_name
+          reply_to_name = grab_user_name(&(m.msg), "email", network_number_from(&m));
+          if (okfsed() && a()->user()->IsUseAutoQuote()) {
+            string b;
+            readfile(&(m.msg), "email", &b);
+            // used to be 1 or 2 depending on s[0] == '@', but
+            // that's allowable now and @ was never in the beginning.
+            auto_quote(&b[0], reply_to_name, b.size(), 2, m.daten);
           }
 
-          grab_quotes(&(m.msg), "email");
+          grab_quotes(&(m.msg), "email", reply_to_name);
           if (ch == '@') {
             bout << "\r\n|#9Enter user name or number:\r\n:";
-            input(s, 75, true);
-            if (((i = strcspn(s, "@")) != wwiv::strings::GetStringLength(s))
-                && isalpha(s[i + 1])) {
-              if (strstr(s, "@32767") == nullptr) {
-                strlwr(s);
-                strcat(s, " @32767");
-              }
+            auto user_email = fixup_user_entered_email(input(75, true));
+            parse_email_info(user_email, &user_number, &system_number);
+            if (user_number || system_number) {
+              email("", user_number, system_number, false, 0);
             }
-            parse_email_info(s, &nUserNumber, &nSystemNumber);
-            if (nUserNumber || nSystemNumber) {
-              email(nUserNumber, nSystemNumber, false, 0);
-            }
-          } else {
-            email(m.fromuser, m.fromsys, false, m.anony);
           }
-          grab_quotes(nullptr, nullptr);
+          else {
+            email("", m.fromuser, m.fromsys, false, m.anony);
+          }
+          clear_quotes();
         }
-        num_mail1 = static_cast<long>(session()->user()->GetNumFeedbackSent()) +
-                    static_cast<long>(session()->user()->GetNumEmailSent()) +
-                    static_cast<long>(session()->user()->GetNumNetEmailSent());
+        num_mail1 = static_cast<long>(a()->user()->GetNumFeedbackSent()) +
+          static_cast<long>(a()->user()->GetNumEmailSent()) +
+          static_cast<long>(a()->user()->GetNumNetEmailSent());
         if (ch == 'A' || ch == '@') {
           if (num_mail != num_mail1) {
             string message;
+            const string name = a()->names()->UserName(a()->usernum, a()->current_net().sysnum);
             if (m.fromsys != 0) {
-              message = session()->GetNetworkName();
+              message = a()->network_name();
               message += ": ";
-              message += session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum);
-            } else {
-              message = session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum);
+              message += name;
+            }
+            else {
+              message = name;
             }
             if (m.anony & anony_receiver) {
               message = ">UNKNOWN<";
@@ -1110,9 +1148,9 @@ void readmail(int mode) {
             message += " read your mail on ";
             message += fulldate();
             if (!(m.status & status_source_verified)) {
-              ssm(m.fromuser, m.fromsys, message.c_str());
+              ssm(m.fromuser, m.fromsys, &net) << message;
             }
-            read_same_email(mloc, mw, curmail, &m, 1, 0);
+            read_same_email(mloc, mw, curmail, m, 1, 0);
             ++curmail;
             if (curmail >= mw) {
               done = true;
@@ -1121,14 +1159,16 @@ void readmail(int mode) {
             if (m.status & status_file) {
               delete_attachment(m.daten, 0);
             }
-          } else {
+          }
+          else {
             bout << "\r\nNo mail sent.\r\n\n";
             i1 = 0;
           }
-        } else {
+        }
+        else {
           if (num_mail != num_mail1) {
             if (!(m.status & status_replied)) {
-              read_same_email(mloc, mw, curmail, &m, 0, status_replied);
+              read_same_email(mloc, mw, curmail, m, 0, status_replied);
             }
             ++curmail;
             if (curmail >= mw) {
@@ -1136,7 +1176,7 @@ void readmail(int mode) {
             }
           }
         }
-        break;
+      } break;
       case 'U':
       case 'V':
       case 'C':
@@ -1146,10 +1186,6 @@ void readmail(int mode) {
         if (m.fromsys == 0 && cs() && m.fromuser != 65535) {
           if (ch == 'V') {
             valuser(m.fromuser);
-          } else if (ch == 'U') {
-            uedit(m.fromuser, UEDIT_NONE);
-          } else {
-            uedit(m.fromuser, UEDIT_FULLINFO | UEDIT_CLEARSCREEN);
           }
         } else if (cs()) {
           bout << "\r\nMail from another system.\r\n\n";
@@ -1161,65 +1197,62 @@ void readmail(int mode) {
           break;
         }
         bout << "\r\n|#2Filename: ";
-        string fileName;
-        input(&fileName, 50);
+        string fileName = input(50);
         if (!fileName.empty()) {
           bout.nl();
           bout << "|#5Allow editing? ";
           if (yesno()) {
             bout.nl();
-            LoadFileIntoWorkspace(fileName.c_str(), false);
+            LoadFileIntoWorkspace(fileName, false);
           } else {
             bout.nl();
-            LoadFileIntoWorkspace(fileName.c_str(),  true);
+            LoadFileIntoWorkspace(fileName,  true);
           }
         }
       }
       break;
       case 'Y':   // Add from here
         if (curmail >= 0) {
-          string downloadFileName;
-          unique_ptr<char[]> b(readfile(&(m.msg), "email", &len));
+          string b;
+          readfile(&(m.msg), "email", &b);
           bout << "E-mail download -\r\n\n|#2Filename: ";
-          input(&downloadFileName, 12);
+          string downloadFileName = input(12);
           if (!okfn(downloadFileName.c_str())) {
             break;
           }
-          File fileTemp(syscfgovr.tempdir, downloadFileName.c_str());
+          File fileTemp(FilePath(a()->temp_directory(), downloadFileName));
           fileTemp.Delete();
           fileTemp.Open(File::modeBinary | File::modeCreateFile | File::modeReadWrite);
-          fileTemp.Write(b.get(), len);
+          fileTemp.Write(b);
           fileTemp.Close();
           bool bSent;
           bool bAbort;
-          send_file(fileTemp.full_pathname().c_str(), &bSent, &bAbort, fileTemp.full_pathname().c_str(), -1, len);
+          send_file(fileTemp.full_pathname(), &bSent, &bAbort, fileTemp.full_pathname(), -1, b.size());
           if (bSent) {
             bout << "E-mail download successful.\r\n";
-            sysoplog("Downloaded E-mail");
+            sysoplog() << "Downloaded E-mail";
           } else {
             bout << "E-mail download aborted.\r\n";
           }
         }
         break;
       }
-    } while (!i1 && !hangup);
-  } while (!hangup && !done);
-
-  free(mloc);
+    } while (!i1 && !a()->hangup_);
+  } while (!a()->hangup_ && !done);
 }
 
-int check_new_mail(int nUserNumber) {
+int check_new_mail(int user_number) {
   int nNumNewMessages = 0;            // number of new mail
 
   unique_ptr<File> pFileEmail(OpenEmailFile(false));
   if (pFileEmail->Exists() && pFileEmail->IsOpen()) {
-    int mfLength = pFileEmail->GetLength() / sizeof(mailrec);
+    int mfLength = pFileEmail->length() / sizeof(mailrec);
     int mWaiting = 0;   // number of mail waiting
     for (int i = 0; (i < mfLength) && (mWaiting < MAXMAIL); i++) {
       mailrec m;
-      pFileEmail->Seek(i * sizeof(mailrec), File::seekBegin);
+      pFileEmail->Seek(i * sizeof(mailrec), File::Whence::begin);
       pFileEmail->Read(&m, sizeof(mailrec));
-      if (m.tosys == 0 && m.touser == nUserNumber) {
+      if (m.tosys == 0 && m.touser == user_number) {
         if (!(m.status & status_seen)) {
           nNumNewMessages++;
         }

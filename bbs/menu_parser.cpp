@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -115,13 +115,13 @@ const char *MenuParseLine(const char *pszSrc, char *pszCmd, char *pszParam1, cha
   pszParam2[0] = 0;
 
   pszSrc = MenuSkipSpaces(pszSrc);
-  while (pszSrc[0] == '~' && !hangup) {
+  while (pszSrc[0] == '~') {
     ++pszSrc;
     pszSrc = MenuSkipSpaces(pszSrc);
   }
 
   int nLen = 0;
-  while (isalnum(*pszSrc) && !hangup) {
+  while (isalnum(*pszSrc)) {
     if (nLen < 30) {
       pszCmd[nLen++] = *pszSrc;
     }

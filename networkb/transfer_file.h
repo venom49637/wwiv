@@ -1,3 +1,20 @@
+/**************************************************************************/
+/*                                                                        */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2015-2017, WWIV Software Services             */
+/*                                                                        */
+/*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
+/*    you may not use this  file  except in compliance with the License.  */
+/*    You may obtain a copy of the License at                             */
+/*                                                                        */
+/*                http://www.apache.org/licenses/LICENSE-2.0              */
+/*                                                                        */
+/*    Unless  required  by  applicable  law  or agreed to  in  writing,   */
+/*    software  distributed  under  the  License  is  distributed on an   */
+/*    "AS IS"  BASIS, WITHOUT  WARRANTIES  OR  CONDITIONS OF ANY  KIND,   */
+/*    either  express  or implied.  See  the  License for  the specific   */
+/*    language governing permissions and limitations under the License.   */
+/**************************************************************************/
 #pragma once
 #ifndef __INCLUDED_NETWORKB_TRANSFER_FILE_H__
 #define __INCLUDED_NETWORKB_TRANSFER_FILE_H__
@@ -14,7 +31,7 @@ namespace net {
   
 class TransferFile {
 public:
-  TransferFile(const std::string& filename, time_t timestamp);
+  TransferFile(const std::string& filename, time_t timestamp, uint32_t crc);
   virtual ~TransferFile();
 
   const std::string filename() const { return filename_; }
@@ -32,7 +49,8 @@ public:
   virtual const std::string as_packet_data(int size, int offset) const final;
 
   const std::string filename_;
-  const time_t timestamp_;
+  const time_t timestamp_ = 0;
+  const uint32_t crc_ = 0;
 };
 
 class InMemoryTransferFile : public TransferFile {
@@ -45,11 +63,11 @@ public:
   // for testing.
   virtual const std::string& contents() const final { return contents_; }
 
-  virtual int file_size() const override final { return contents_.length(); }
+  int file_size() const override final { return contents_.length(); }
   virtual bool Delete() { contents_.clear(); return true; }
-  virtual bool GetChunk(char* chunk, std::size_t start, std::size_t size) override final;
-  virtual bool WriteChunk(const char* chunk, std::size_t size) override final;
-  virtual bool Close() override final;
+  bool GetChunk(char* chunk, std::size_t start, std::size_t size) override final;
+  bool WriteChunk(const char* chunk, std::size_t size) override final;
+  bool Close() override final;
 
 private:
   std::string contents_;

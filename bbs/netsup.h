@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,19 +18,21 @@
 #ifndef __INCLUDED_BBS_NETSUP_H__
 #define __INCLUDED_BBS_NETSUP_H__
 
+#include <chrono>
+#include <cstdint>
+#include <string>
 #include "sdk/net.h"
 
 void cleanup_net();
-int  cleanup_net1();
-void do_callout(int sn);
-void attempt_callout();
 void print_pending_list();
-void gate_msg(net_header_rec * nh, char *pszMessageText, int nNetNumber, const char *pszAuthorName,
-  unsigned short int *pList, int nFromNetworkNumber);
-void force_callout(int dw);
-long *next_system_reg(int ts);
-void run_exp();
+void gate_msg(
+  net_header_rec* nh, char *messageText, int net_number,
+  const std::string& author_name, std::vector<uint16_t> list,
+  int nFromNetworkNumber);
+void force_callout();
+bool attempt_callout();
 
+std::chrono::steady_clock::time_point last_network_attempt();
 
 
 #endif  // __INCLUDED_BBS_NETSUP_H__

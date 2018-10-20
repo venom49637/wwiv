@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -21,17 +21,38 @@
 #include <memory>
 #include <string>
 
-#include "bbs/bbslist.h"
+#include "bbs/basic.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsovl3.h"
+#include "bbs/bbsutl.h"
+#include "bbs/hop.h"
 #include "bbs/menu.h"
 #include "bbs/menuspec.h"
 #include "bbs/menusupp.h"
 #include "bbs/menu_parser.h"
+#include "bbs/misccmd.h"
 #include "bbs/new_bbslist.h"
+#include "bbs/syschat.h"
+#include "bbs/pause.h"
 #include "bbs/printfile.h"
-#include "bbs/wwiv.h"
+#include "bbs/shortmsg.h"
+#include "bbs/sr.h"
+#include "bbs/subacc.h"
+#include "bbs/sublist.h"
+#include "bbs/sysopf.h"
+#include "bbs/utility.h"
+
+#include "bbs/wqscn.h"
+#include "bbs/xfer.h"
+#include "bbs/xferovl.h"
+#include "bbs/xferovl1.h"
+#include "bbs/xfertmp.h"
 #include "core/inifile.h"
+#include "core/file.h"
 #include "core/stl.h"
 #include "core/strings.h"
+#include "sdk/filenames.h"
 
 using std::map;
 using std::string;
@@ -49,80 +70,75 @@ namespace menus {
 
 struct MenuItemContext {
 public:
-  MenuInstanceData* pMenuData;
+  MenuItemContext(MenuInstance* m, const string& p1, const string& p2)
+    : pMenuData(m), param1(p1), param2(p2) {}
+  // May be null if not invoked from an actual menu.
+  MenuInstance* pMenuData;
   string param1;
   string param2;
+  bool finished = false;
+  bool need_reload = false;
 };
 
 map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCommandMap();
 
-bool UseNewBBSList() {
-  IniFile iniFile(FilePath(application()->GetHomeDir(), WWIV_INI), INI_TAG);
-  if (iniFile.IsOpen()) {
-    return iniFile.GetBooleanValue("USE_NEW_BBSLIST", true);
-  }
-  return false;
-}
-
-void InterpretCommand(MenuInstanceData* pMenuData, const char *pszScript) {
+void InterpretCommand(MenuInstance* menudata, const std::string& script) {
   static map<string, std::function<void(MenuItemContext& context)>, wwiv::stl::ci_less> functions = CreateCommandMap();
 
-  char szCmd[31], szParam1[51], szParam2[51];
-  char szTempScript[255];
-  memset(szTempScript, 0, sizeof(szTempScript));
-  strncpy(szTempScript, pszScript, 250);
-
-  if (pszScript[0] == 0) {
+  if (script.empty()) {
     return;
   }
 
-  const char* pszScriptPointer = szTempScript;
-  while (pszScriptPointer && !hangup) {
-    pszScriptPointer = MenuParseLine(pszScriptPointer, szCmd, szParam1, szParam2);
+  char temp_script[255];
+  to_char_array(temp_script, script);
 
-    if (szCmd[0] == 0) { 
+  const char* p = temp_script;
+  while (p) {
+    char scmd[31], param1[51], param2[51];
+    p = MenuParseLine(p, scmd, param1, param2);
+
+    if (scmd[0] == 0) { 
       break;
     }
 
-    string cmd(szCmd);
+    string cmd(scmd);
     if (contains(functions, cmd)) {
-      MenuItemContext context{ pMenuData, szParam1, szParam2 };
+      MenuItemContext context(menudata, param1, param2);
       functions.at(cmd)(context);
+      if (menudata) {
+        menudata->reload = context.need_reload;
+        menudata->finished = (context.finished || context.need_reload);
+      }
     }
   }
 }
 
 #if defined( _MSC_VER )
 #pragma warning( push )
-#pragma warning( disable : 4100 )  // unreferenced formal parameter for pMenuData, param1, param2
+#pragma warning( disable : 4100 )  // unreferenced formal parameter for menudata, param1, param2
 #endif
 
 map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCommandMap() {
   return {
     { "MENU", [](MenuItemContext& context) {
-      unique_ptr<MenuInstanceData> new_menu(new MenuInstanceData{});
-      new_menu->Menus(context.pMenuData->path_, context.param1);
+      if (context.pMenuData) {
+        MenuInstance new_menu(context.pMenuData->menu_directory(), context.param1);
+        new_menu.RunMenu();
+      }
     } },
     { "ReturnFromMenu", [](MenuItemContext& context) {
-      InterpretCommand(context.pMenuData, context.pMenuData->header.szExitScript);
-      context.pMenuData->finished = true;
-    } },
-    { "EditMenuSet", [](MenuItemContext& context) {
-      EditMenus();           // flag if we are editing this menu
-      context.pMenuData->finished = true;
-      context.pMenuData->reload = true;
+      if (context.pMenuData) {
+        InterpretCommand(context.pMenuData, context.pMenuData->header.szExitScript);
+        context.finished = true;
+      }
     } },
     { "DLFreeFile", [](MenuItemContext& context) {
-      char s[MAX_PATH];
-      strcpy(s, context.param2.c_str());
-      align(s);
-      MenuDownload(context.param1.c_str(), s, true, true);
+      const auto s = aligns(context.param2);
+      MenuDownload(context.param1, s, true, true);
     } },
     { "DLFile", [](MenuItemContext& context) {
-      char s[MAX_PATH];
-      strcpy(s, context.param2.c_str());
-      align(s);
-      MenuDownload(context.param1.c_str(), s, false, true);
+      const auto s = aligns(context.param2);
+      MenuDownload(context.param1, s, false, true);
     } },
     { "RunDoor", [](MenuItemContext& context) {
       MenuRunDoorName(context.param1.c_str(), false);
@@ -131,12 +147,16 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
       MenuRunDoorName(context.param1.c_str(), true);
     } },
     { "RunDoorNumber", [](MenuItemContext& context) {
-      int nTemp = atoi(context.param1.c_str());
-      MenuRunDoorNumber(nTemp, false);
+      auto t = to_number<int>(context.param1.c_str());
+      MenuRunDoorNumber(t, false);
     } },
     { "RunDoorNumberFree", [](MenuItemContext& context) {
-      int nTemp = atoi(context.param1.c_str());
-      MenuRunDoorNumber(nTemp, true);
+      auto t = to_number<int>(context.param1.c_str());
+      MenuRunDoorNumber(t, true);
+    } },
+    { "RunBasic", [](MenuItemContext& context) {
+      // Runs a basic script from GFILES/
+      wwiv::bbs::RunBasicScript(context.param1);
     } },
     { "PrintFile", [](MenuItemContext& context) {
       printfile(context.param1, true);
@@ -170,14 +190,18 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     } },
     { "ConfigUserMenuSet", [](MenuItemContext& context) {
       ConfigUserMenuSet();
-      context.pMenuData->finished = true;
-      context.pMenuData->reload = true;
+      context.need_reload = true;
     } },
     { "DisplayHelp", [](MenuItemContext& context) {
-      if (session()->user()->IsExpert()) {
-        context.pMenuData->DisplayHelp();
+      if (context.pMenuData && a()->user()->IsExpert()) {
+        context.pMenuData->DisplayMenu();
       }
     } },
+    {"DisplayMenu", [](MenuItemContext& context) {
+      if (context.pMenuData && a()->user()->IsExpert()) {
+        context.pMenuData->DisplayMenu();
+      }
+    }},
     { "SelectSub", [](MenuItemContext& context) {
       ChangeSubNumber();
     } },
@@ -212,17 +236,13 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
       AutoMessage();
     } },
     { "BBSList", [](MenuItemContext& context) {
-      if (UseNewBBSList()) {
-        NewBBSList();
-      } else {
-        LegacyBBSList();
-      }
+      NewBBSList();
     } },
     { "RequestChat", [](MenuItemContext& context) {
       RequestChat();
     } },
     { "Defaults", [](MenuItemContext& context) {
-      Defaults(context.pMenuData);
+      Defaults(context.need_reload);
     } },
     { "SendEMail", [](MenuItemContext& context) {
       SendEMail();
@@ -281,14 +301,8 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     { "YourInfo", [](MenuItemContext& context) {
       YourInfo();
     } },
-    { "ExpressScan", [](MenuItemContext& context) {
-      ExpressScan();
-    } },
     { "WWIVVer", [](MenuItemContext& context) {
       WWIVVersion();
-    } },
-    { "InstanceEdit", [](MenuItemContext& context) {
-      InstanceEdit();
     } },
     { "ConferenceEdit", [](MenuItemContext& context) {
       JumpEdit();
@@ -305,12 +319,6 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     { "ChangeUser", [](MenuItemContext& context) {
       ChangeUser();
     } },
-    { "CLOUT", [](MenuItemContext& context) {
-      CallOut();
-    } },
-    { "Debug", [](MenuItemContext& context) {
-      Debug();
-    } },
     { "DirEdit", [](MenuItemContext& context) {
       DirEdit();
     } },
@@ -326,23 +334,14 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     { "ReadAllMail", [](MenuItemContext& context) {
       ReadAllMail();
     } },
-    { "Reboot", [](MenuItemContext& context) {
-      RebootComputer();
-    } },
     { "ReloadMenus", [](MenuItemContext& context) {
       ReloadMenus();
-    } },
-    { "ResetUserIndex", [](MenuItemContext& context) {
-      ResetFiles();
     } },
     { "ResetQscan", [](MenuItemContext& context) {
       ResetQscan();
     } },
     { "MemStat", [](MenuItemContext& context) {
       MemoryStatus();
-    } },
-    { "PackMsgs", [](MenuItemContext& context) {
-      PackMessages();
     } },
     { "VoteEdit", [](MenuItemContext& context) {
       InitVotes();
@@ -362,14 +361,11 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     { "TextEdit", [](MenuItemContext& context) {
       TextEdit();
     } },
-    { "UserEdit", [](MenuItemContext& context) {
-      UserEdit();
-    } },
     { "VotePrint", [](MenuItemContext& context) {
       VotePrint();
     } },
     { "YLog", [](MenuItemContext& context) {
-      YesturdaysLog();
+      YesterdaysLog();
     } },
     { "ZLog", [](MenuItemContext& context) {
       ZLog();
@@ -384,7 +380,7 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
       bout.cls();
     } },
     { "NetListing", [](MenuItemContext& context) {
-      NetListing();
+      print_net_listing(false);
     } },
     { "WHO", [](MenuItemContext& context) {
       WhoIsOnline();
@@ -405,12 +401,6 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     } },
     { "ChatRoom", [](MenuItemContext& context) {
       ChatRoom();
-    } },
-    { "DownloadPosts", [](MenuItemContext& context) {
-      DownloadPosts();
-    } },
-    { "DownloadFileList", [](MenuItemContext& context) {
-      DownloadFileList();
     } },
     { "ClearQScan", [](MenuItemContext& context) {
       ClearQScan();
@@ -532,9 +522,6 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     { "SetNewScanMsg", [](MenuItemContext& context) {
       SetNewScanMsg();
     } },
-    { "ReadMessages", [](MenuItemContext& context) {
-      ReadMessages();
-    } },
     { "EventEdit", [](MenuItemContext& context) {
       EventEdit();
     } },
@@ -564,9 +551,6 @@ map<string, std::function<void(MenuItemContext&)>, wwiv::stl::ci_less> CreateCom
     } },
     { "Packers", [](MenuItemContext& context) {
       Packers();
-    } },
-    { "ColorConfig", [](MenuItemContext& context) {
-      color_config();
     } },
     { "InitVotes", [](MenuItemContext& context) {
       InitVotes();

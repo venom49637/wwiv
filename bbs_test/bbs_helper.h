@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,8 +23,8 @@
 #include <string>
 #include "bbs/bbs.h"
 #include "core_test/file_helper.h"
-#include "bbs/local_io.h"
-#include "bbs/wuser.h"
+#include "local_io/local_io.h"
+#include "sdk/user.h"
 
 class TestIO;
 
@@ -39,66 +39,92 @@ class BbsHelper {
 public:
     virtual void SetUp();
     virtual void TearDown();
-    FileHelper& files() { return files_; }
-    WUser* user() const { return user_; }
+    wwiv::sdk::User* user() const { return user_; }
     TestIO* io() const { return io_.get(); }
+
+    // Accessors for various directories
+    FileHelper& files() { return files_; }
+    const std::string& data() { return dir_data_; }
+    const std::string& gfiles() { return dir_gfiles_; }
+
 public:
     FileHelper files_;
     std::string dir_data_;
     std::string dir_gfiles_;
     std::string dir_en_gfiles_;
     std::string dir_menus_;
-    std::unique_ptr<WApplication> app_;
+    std::string dir_dloads_;
+    std::string dir_msgs_;
+    std::unique_ptr<Application> app_;
     std::unique_ptr<TestIO> io_;
-    WUser* user_;
+    wwiv::sdk::User* user_;
 };
 
 class TestIO {
 public:
   TestIO();
-  void Clear() { captured_.clear(); } 
+  void Clear() { captured_.clear(); rcaptured_.clear(); }
   std::string captured();
+  std::string rcaptured();
   LocalIO* local_io() const { return local_io_; }
+  RemoteIO* remote_io() const { return remote_io_; }
 private:
   LocalIO* local_io_;
+  RemoteIO* remote_io_;
   std::string captured_;
+  std::string rcaptured_;
 };
 
 class TestLocalIO : public LocalIO {
 public:
   TestLocalIO(std::string* captured);
-  virtual void LocalPutch(unsigned char ch) override;
-  virtual void LocalGotoXY(int x, int y) override {}
-  virtual int WhereX() override { return 0; }
-  virtual int WhereY() override { return 0; }
-  virtual void LocalLf() override {}
-  virtual void LocalCr() override {}
-  virtual void LocalCls() override {}
-  virtual void LocalBackspace() override {}
-  virtual void LocalPutchRaw(unsigned char ch) override {}
-  virtual void LocalPuts(const std::string& s) override {}
-  virtual void LocalXYPuts(int x, int y, const std::string& text) override {}
-  virtual void LocalFastPuts(const std::string& text) override {}
-  virtual int LocalPrintf(const char *pszFormattedText, ...) override { return 0; }
-  virtual int LocalXYPrintf(int x, int y, const char *pszFormattedText, ...) override { return 0; }
-  virtual int LocalXYAPrintf(int x, int y, int nAttribute, const char *pszFormattedText, ...) override { return 0; }
-  virtual void set_protect(int l) override {}
-  virtual void savescreen() override {}
-  virtual void restorescreen() override {}
-  virtual void skey(char ch) override {}
-  virtual void tleft(bool bCheckForTimeOut) override {}
-  virtual bool LocalKeyPressed() override { return false; }
-  virtual void SaveCurrentLine(char *cl, char *atr, char *xl, char *cc) override {}
-  virtual unsigned char LocalGetChar() override { return getchar(); }
-  virtual void MakeLocalWindow(int x, int y, int xlen, int ylen) override {}
-  virtual void SetCursor(int cursorStyle) override {}
-  virtual void LocalClrEol() override {}
-  virtual void LocalWriteScreenBuffer(const char *pszBuffer) override {}
-  virtual int GetDefaultScreenBottom() override { return 25; }
-  virtual void LocalEditLine(char *s, int len, int status, int *returncode, char *ss) override {}
-  virtual void UpdateNativeTitleBar() override {}
-  virtual void UpdateTopScreen(WStatus* pStatus, WSession *pSession, int nInstanceNumber) override {}
+  void Putch(unsigned char ch) override;
+  void GotoXY(int, int) override {}
+  int WhereX() const noexcept override { return 0; }
+  int WhereY() const noexcept override { return 0; }
+  void Lf() override {}
+  void Cr() override {}
+  void Cls() override {}
+  void Backspace() override {}
+  void PutchRaw(unsigned char) override {}
+  void Puts(const std::string& ) override {}
+  void PutsXY(int, int, const std::string&) override {}
+  void PutsXYA(int, int, int, const std::string&) override {}
+  void FastPuts(const std::string&) override {}
+  void set_protect(int) override {}
+  void savescreen() override {}
+  void restorescreen() override {}
+  bool KeyPressed() override { return false; }
+  unsigned char GetChar() override { return static_cast<unsigned char>(getchar()); }
+  void MakeLocalWindow(int, int, int, int) override {}
+  void SetCursor(int) override {}
+  void ClrEol() override {}
+  void WriteScreenBuffer(const char *) override {}
+  int GetDefaultScreenBottom() const noexcept override { return 25; }
+  void EditLine(char *, int, AllowedKeys, int *, const char *) override {}
+  void UpdateNativeTitleBar(const std::string& system_name, int instance_number) override {}
 
+  std::string* captured_;
+};
+
+class TestRemoteIO : public RemoteIO {
+public:
+  TestRemoteIO(std::string* captured);
+  virtual ~TestRemoteIO() {}
+
+  bool open() override { return true; }
+  void close(bool) override {}
+  unsigned char getW() override { return 0; }
+  bool disconnect() override { return true; }
+  void purgeIn() override {}
+  unsigned int put(unsigned char ch) override;
+  unsigned int write(const char *buffer, unsigned int count, bool bNoTranslation = false) override;
+  unsigned int read(char *, unsigned int) override { return 0; }
+  bool connected() override { return true; }
+  bool incoming() override { return false; }
+  unsigned int GetHandle() const override { return 0; }
+
+private:
   std::string* captured_;
 };
 

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*             Copyright (C)2014-2015 WWIV Software Services              */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2014-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -26,12 +26,25 @@ class SdkHelper {
 public:
   SdkHelper();
   ~SdkHelper();
+  bool SetUp() { return true; }
 
   const std::string& root() const { return root_; }
+  const std::string& data() const { return data_; }
+  const std::string& dloads() const { return dloads_; }
+  const std::string& msgs() const { return msgs_; }
+  const std::string& gfiles() const { return gfiles_; }
+  const std::string& menus() const { return menus_; }
+  const std::string& scripts() const { return scripts_; }
+  FileHelper& files() { return files_; }
 
   std::string CreatePath(const std::string& name);
   FileHelper files_;
   std::string data_;
+  std::string dloads_;
+  std::string msgs_;
+  std::string menus_;
+  std::string gfiles_;
+  std::string scripts_;
 
 private:
   const std::string saved_dir_;

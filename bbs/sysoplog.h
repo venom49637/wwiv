@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,15 +19,28 @@
 #define __INCLUDED_SYSOPLOG_H__
 
 #include <string>
+#include <sstream>
 
 std::string GetSysopLogFileName(const std::string& date);
-void GetTemporaryInstanceLogFileName(char *pszInstanceLogFileName);
+std::string GetTemporaryInstanceLogFileName();
 void catsl();
 void sysopchar(const std::string& text);
-void sysoplog(const std::string& text, bool bIndent = true);
-void sysoplogf(const char *pszFormat, ...);
-void sysoplogfi(bool bIndent, const char *pszFormat, ...);
 
+class sysoplog {
+public:
+  sysoplog(bool indent = true) : indent_(indent) {}
+  ~sysoplog();
+
+  template <typename T>
+  sysoplog& operator<<(T const & value) {
+    stream_ << value;
+    return *this;
+  }
+
+private:
+  std::ostringstream stream_;
+  bool indent_{true};
+};
 
 
 #endif  // __INCLUDED_SYSOPLOG_H__

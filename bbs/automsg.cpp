@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -25,13 +25,12 @@
 #include "bbs/bbs.h"
 #include "bbs/bbsutl.h"
 #include "bbs/com.h"
-#include "bbs/msgbase.h"
+#include "bbs/email.h"
 #include "bbs/sysoplog.h"
 #include "bbs/utility.h"
-#include "bbs/vars.h"
 #include "bbs/quote.h"
-#include "bbs/wsession.h"
-#include "bbs/wstatus.h"
+#include "bbs/application.h"
+#include "sdk/status.h"
 #include "core/strings.h"
 #include "core/textfile.h"
 #include "sdk/filenames.h"
@@ -40,20 +39,21 @@ using std::string;
 using std::stringstream;
 using std::unique_ptr;
 using std::vector;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 char ShowAMsgMenuAndGetInput(const string& autoMessageLockFileName);
-void write_automessage();
 
 /**
  * Reads the auto message
  */
 void read_automessage() {
   bout.nl();
-  unique_ptr<WStatus> current_status(application()->GetStatusManager()->GetStatus());
+  auto current_status = a()->status_manager()->GetStatus();
   bool bAutoMessageAnonymous = current_status->IsAutoMessageAnonymous();
 
-  TextFile autoMessageFile(syscfg.gfilesdir, AUTO_MSG, "rt");
+  TextFile autoMessageFile(FilePath(a()->config()->gfilesdir(), AUTO_MSG), "rt");
   string line;
   if (!autoMessageFile.IsOpen() || !autoMessageFile.ReadLine(&line)) {
     bout << "|#3No auto-message.\r\n";
@@ -64,7 +64,7 @@ void read_automessage() {
   StringTrimEnd(&line);
   string authorName = line;
   if (bAutoMessageAnonymous) {
-    if (getslrec(session()->GetEffectiveSl()).ability & ability_read_post_anony) {
+    if (a()->effective_slrec().ability & ability_read_post_anony) {
       stringstream ss;
       ss << "<<< " << line << " >>>";
       authorName = ss.str();
@@ -87,7 +87,7 @@ void read_automessage() {
 /**
  * Writes the auto message
  */
-void write_automessage() {
+static void write_automessage() {
   vector<string> lines;
   string rollOver;
 
@@ -101,26 +101,25 @@ void write_automessage() {
   }
   bout.nl();
   bool bAnonStatus = false;
-  if (getslrec(session()->GetEffectiveSl()).ability & ability_post_anony) {
+  if (a()->effective_slrec().ability & ability_post_anony) {
     bout << "|#9Anonymous? ";
     bAnonStatus = yesno();
   }
 
   bout << "|#9Is this OK? ";
   if (yesno()) {
-    WStatus *pStatus = application()->GetStatusManager()->BeginTransaction();
-    pStatus->SetAutoMessageAnonymous(bAnonStatus);
-    pStatus->SetAutoMessageAuthorUserNumber(session()->usernum);
-    application()->GetStatusManager()->CommitTransaction(pStatus);
+    a()->status_manager()->Run([bAnonStatus](WStatus& s) {
+      s.SetAutoMessageAnonymous(bAnonStatus);
+      s.SetAutoMessageAuthorUserNumber(a()->usernum);
+    });
 
-    TextFile file(syscfg.gfilesdir, AUTO_MSG, "wt");
-    string authorName = session()->user()->GetUserNameAndNumber(session()->usernum);
-    file.WriteFormatted("%s\r\n", authorName.c_str());
-    sysoplog("Changed Auto-message");
+    TextFile file(FilePath(a()->config()->gfilesdir(), AUTO_MSG), "wt");
+    const string authorName = a()->names()->UserName(a()->usernum);
+    file.WriteLine(authorName);
+    sysoplog() << "Changed Auto-message";
     for (const auto& line : lines) {
-      file.Write(line);
-      file.Write("\r\n");
-      sysoplog(line, true);
+      file.WriteLine(line);
+      sysoplog(true) << line;
     }
     bout << "\r\n|#5Auto-message saved.\r\n\n";
     file.Close();
@@ -130,14 +129,13 @@ void write_automessage() {
 
 char ShowAMsgMenuAndGetInput(const string& autoMessageLockFileName) {
   bool bCanWrite = false;
-  if (!session()->user()->IsRestrictionAutomessage() && !File::Exists(autoMessageLockFileName)) {
-    bCanWrite = (getslrec(session()->GetEffectiveSl()).posts) ? true : false;
+  if (!a()->user()->IsRestrictionAutomessage() && !File::Exists(autoMessageLockFileName)) {
+    bCanWrite = (a()->effective_slrec().posts) ? true : false;
   }
 
   char cmdKey = 0;
   if (cs()) {
-    bout <<
-                       "|#9(|#2Q|#9)uit, (|#2R|#9)ead, (|#2A|#9)uto-reply, (|#2W|#9)rite, (|#2L|#9)ock, (|#2D|#9)el, (|#2U|#9)nlock : ";
+    bout << "|#9(|#2Q|#9)uit, (|#2R|#9)ead, (|#2A|#9)uto-reply, (|#2W|#9)rite, (|#2L|#9)ock, (|#2D|#9)el, (|#2U|#9)nlock : ";
     cmdKey = onek("QRWALDU", true);
   } else if (bCanWrite) {
     bout << "|#9(|#2Q|#9)uit, (|#2R|#9)ead, (|#2A|#9)uto-reply, (|#2W|#9)rite : ";
@@ -153,13 +151,8 @@ char ShowAMsgMenuAndGetInput(const string& autoMessageLockFileName) {
  * Main Automessage menu.  Displays the auto message then queries for input.
  */
 void do_automessage() {
-  stringstream lockFileStream;
-  lockFileStream << syscfg.gfilesdir << LOCKAUTO_MSG;
-  string automessageLockFile = lockFileStream.str();
-
-  stringstream autoMessageStream;
-  autoMessageStream << syscfg.gfilesdir << AUTO_MSG;
-  string autoMessageFile = autoMessageStream.str();
+  auto automessageLockFile = FilePath(a()->config()->gfilesdir(), LOCKAUTO_MSG);
+  auto autoMessageFile = FilePath(a()->config()->gfilesdir(), AUTO_MSG);
 
   // initally show the auto message
   read_automessage();
@@ -179,11 +172,11 @@ void do_automessage() {
       write_automessage();
       break;
     case 'A': {
-      grab_quotes(nullptr, nullptr);
-      unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-      if (pStatus->GetAutoMessageAuthorUserNumber() > 0) {
-        strcpy(irt, "Re: AutoMessage");
-        email(pStatus->GetAutoMessageAuthorUserNumber(), 0, false, pStatus->IsAutoMessageAnonymous() ? anony_sender : 0);
+      clear_quotes();
+      auto status = a()->status_manager()->GetStatus();
+      if (status->GetAutoMessageAuthorUserNumber() > 0) {
+        email("Re: AutoMessage", static_cast<uint16_t>(status->GetAutoMessageAuthorUserNumber()), 0,
+              false, status->IsAutoMessageAnonymous() ? anony_sender : 0);
       }
     }
     break;
@@ -222,5 +215,5 @@ void do_automessage() {
       }
       break;
     }
-  } while (!done && !hangup);
+  } while (!done);
 }

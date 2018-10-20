@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,457 +19,127 @@
 #include "bbs/inmsg.h"
 
 #include <algorithm>
+#include <chrono>
+#include <deque>
 #include <string>
+#include <sstream>
+#include <vector>
 
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsovl2.h"
+#include "bbs/bbsovl3.h"
+#include "bbs/bbsutl2.h"
+#include "bbs/com.h"
 #include "bbs/crc.h"
 #include "bbs/input.h"
-#include "bbs/subxtr.h"
+#include "sdk/subxtr.h"
 #include "bbs/printfile.h"
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+#include "bbs/instmsg.h"
+#include "bbs/external_edit.h"
+#include "local_io/keycodes.h"
+#include "bbs/message_file.h"
+#include "bbs/quote.h"
+#include "local_io/wconstants.h"
+#include "bbs/workspace.h"
+#include "core/scope_exit.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/textfile.h"
+#include "core/version.h"
 #include "core/wwivassert.h"
-#include "bbs/external_edit.h"
-#include "bbs/keycodes.h"
-#include "bbs/wconstants.h"
+#include "core/datetime.h"
+#include "sdk/names.h"
+#include "sdk/filenames.h"
 
 using std::string;
 using std::unique_ptr;
+using std::vector;
 using wwiv::bbs::InputMode;
+using namespace wwiv::bbs;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
+using namespace wwiv::stl;
 using namespace wwiv::strings;
 
-//
-// Local function prototypes
-//
-bool InternalMessageEditor(char* lin, int maxli, int* curli, int* setanon, string *title);
-void GetMessageTitle(string *title, bool force_title);
-void UpdateMessageBufferTheadsInfo(char *pszMessageBuffer, long *plBufferLength, const char *aux);
-void UpdateMessageBufferInReplyToInfo(char *pszMessageBuffer, long *plBufferLength, const char *aux);
-void UpdateMessageBufferTagLine(char *pszMessageBuffer, long *plBufferLength, const char *aux);
-void UpdateMessageBufferQuotesCtrlLines(char *pszMessageBuffer, long *plBufferLength);
-void GetMessageAnonStatus(bool *real_name, int *anony, int setanon);
-
 static const int LEN = 161;
+static const char crlf[] = "\r\n";
 
-static bool GetMessageToName(const char *aux) {
-  // If session()->GetCurrentReadMessageArea() is -1, then it hasn't been set by reading a sub,
+
+static bool GetMessageToName(MessageEditorData& data) {
+  // If a()->GetCurrentReadMessageArea() is -1, then it hasn't been set by reading a sub,
   // also, if we are using e-mail, this is definately NOT a FidoNet
   // post so there's no reason in wasting everyone's time in the loop...
-  WWIV_ASSERT(aux);
-  if (session()->GetCurrentReadMessageArea() == -1 ||
-      IsEqualsIgnoreCase(aux, "email")) {
-    return 0;
+  if (a()->GetCurrentReadMessageArea() == -1 || data.is_email()) {
+    return false;
   }
 
-  bool bHasAddress = false;
-  bool newlsave = newline;
-
-  if (xsubs[session()->GetCurrentReadMessageArea()].num_nets) {
-    for (int i = 0; i < xsubs[session()->GetCurrentReadMessageArea()].num_nets; i++) {
-      xtrasubsnetrec *xnp = &xsubs[session()->GetCurrentReadMessageArea()].nets[i];
-      if (net_networks[xnp->net_num].type == net_type_fidonet &&
-          !IsEqualsIgnoreCase(aux, "email")) {
-        bHasAddress = true;
-        bout << "|#1Fidonet addressee, |#7[|#2Enter|#7]|#1 for ALL |#0: ";
-        newline = false;
-        string to_name = Input1("", 40, true, InputMode::MIXED);
-        newline = newlsave;
-        if (to_name.empty()) {
-          strcpy(irt_name, "ALL");
-          bout << "|#4All\r\n";
-          bout.Color(0);
-        } else {
-          strcpy(irt_name, to_name.c_str());
-        }
-        strcpy(irt, "\xAB");
-      }
-    }
-  }
-  return bHasAddress;
-}
-
-void inmsg(messagerec * pMessageRecord, string* title, int *anony, bool needtitle, const char *aux, int fsed,
-           const char *pszDestination, int flags, bool force_title) {
-  char *lin = nullptr;
-
-  int oiia = setiia(0);
-
-  if (fsed != INMSG_NOFSED && !okfsed()) {
-    fsed = INMSG_NOFSED;
+  if (a()->current_sub().nets.empty()) {
+    return false;
   }
 
-  const string exted_filename = StringPrintf("%s%s", syscfgovr.tempdir, INPUT_MSG);
-  if (fsed) {
-    fsed = INMSG_FSED;
-  }
-  if (use_workspace) {
-    if (!File::Exists(exted_filename)) {
-      use_workspace = false;
-    } else {
-      fsed = INMSG_FSED_WORKSPACE;
-    }
-  }
-
-  int maxli = GetMaxMessageLinesAllowed();
-  if (!fsed) {
-    if ((lin = static_cast<char *>(BbsAllocA((maxli + 10) * LEN))) == nullptr) {
-      pMessageRecord->stored_as = 0xffffffff;
-      setiia(oiia);
-      return;
-    }
-    for (int i = 0; i < maxli; i++) {
-      lin[i * LEN] = '\0';
-    }
-  }
-  bout.nl();
-
-  if (irt_name[0] == '\0') {
-    if (GetMessageToName(aux)) {
-      bout.nl();
-    }
-  }
-
-  GetMessageTitle(title, force_title);
-  if (title->empty() && needtitle) {
-    bout << "|#6Aborted.\r\n";
-    pMessageRecord->stored_as = 0xffffffff;
-    if (!fsed) {
-      free(lin);
-    }
-    setiia(oiia);
-    return;
-  }
-
-  int setanon = 0;
-  int curli = 0;
-  bool bSaveMessage = false;
-  if (fsed == INMSG_NOFSED) {   // Use Internal Message Editor
-    bSaveMessage = InternalMessageEditor(lin, maxli, &curli, &setanon, title);
-  } else if (fsed == INMSG_FSED) {   // Use Full Screen Editor
-    bSaveMessage = ExternalMessageEditor(maxli, &setanon, title, pszDestination, flags, aux);
-  } else if (fsed == INMSG_FSED_WORKSPACE) {   // "auto-send mail message"
-    bSaveMessage = File::Exists(exted_filename);
-    if (bSaveMessage && !session()->IsNewMailWatiting()) {
-      bout << "Reading in file...\r\n";
-    }
-    use_workspace = false;
-  }
-
-  if (bSaveMessage) {
-    long lMaxMessageSize = 0;
-    bool real_name = false;
-    GetMessageAnonStatus(&real_name, anony, setanon);
-    bout.backline();
-    if (!session()->IsNewMailWatiting()) {
-      SpinPuts("Saving...", 2);
-    }
-    File fileExtEd(exted_filename);
-    if (fsed) {
-      fileExtEd.Open(File::modeBinary | File::modeReadOnly);
-      long lExternalEditorFileSize = fileExtEd.GetLength();
-      lMaxMessageSize  = std::max<long>(lExternalEditorFileSize, 30000);
-    } else {
-      for (int i5 = 0; i5 < curli; i5++) {
-        lMaxMessageSize  += (strlen(&(lin[i5 * LEN])) + 2);
-      }
-    }
-    lMaxMessageSize  += 1024;
-    unique_ptr<char[]> b(new char[lMaxMessageSize]);
-    if (!b) {
-      free(lin);
-      bout << "Out of memory.\r\n";
-      pMessageRecord->stored_as = 0xffffffff;
-      setiia(oiia);
-      return;
-    }
-    long lCurrentMessageSize = 0;
-
-    // Add author name
-    if (real_name) {
-      AddLineToMessageBuffer(b.get(), session()->user()->GetRealName(), &lCurrentMessageSize);
-    } else {
-      if (session()->IsNewMailWatiting()) {
-        const string sysop_name = StringPrintf("%s #1", syscfg.sysopname);
-        AddLineToMessageBuffer(b.get(), sysop_name, &lCurrentMessageSize);
+  bool has_address = false;
+  bool newlsave = bout.newline;
+  for (const auto& xnp : a()->current_sub().nets) {
+    if (a()->net_networks[xnp.net_num].type == network_type_t::ftn && !data.is_email()) {
+      bout << "|#2To   : ";
+      bout.newline = false;
+      auto to_name = input_text("All", 40);
+      bout.newline = newlsave;
+      if (to_name.empty()) {
+        data.to_name = "All";
+        bout << "|#4All\r\n";
+        bout.Color(0);
       } else {
-        AddLineToMessageBuffer(b.get(), session()->user()->GetUserNameNumberAndSystem(session()->usernum, net_sysnum),
-                               &lCurrentMessageSize);
+        data.to_name = to_name;
       }
+      return true;
+      // WTF??? strcpy(a()->context().irt_, "\xAB");
     }
-
-    // Add date to message body
-    time_t lTime = time(nullptr);
-    string time_string(asctime(localtime(&lTime)));
-    // asctime appends a \n to the end of the string.
-    StringTrimEnd(&time_string);
-    AddLineToMessageBuffer(b.get(), time_string, &lCurrentMessageSize);
-    UpdateMessageBufferQuotesCtrlLines(b.get(), &lCurrentMessageSize);
-
-    if (session()->IsMessageThreadingEnabled()) {
-      UpdateMessageBufferTheadsInfo(b.get(), &lCurrentMessageSize, aux);
-    }
-    if (irt[0]) {
-      UpdateMessageBufferInReplyToInfo(b.get(), &lCurrentMessageSize, aux);
-    }
-    if (fsed) {
-      // Read the file produced by the external editor and add it to 'b'
-      long lFileSize = fileExtEd.GetLength();
-      fileExtEd.Read((&(b[lCurrentMessageSize])), lFileSize);
-      lCurrentMessageSize += lFileSize;
-      fileExtEd.Close();
-    } else {
-      // iterate through the lines in "char *lin" and append them to 'b'
-      for (int i5 = 0; i5 < curli; i5++) {
-        AddLineToMessageBuffer(b.get(), &(lin[i5 * LEN]), &lCurrentMessageSize);
-      }
-    }
-
-    if (application()->HasConfigFlag(OP_FLAGS_MSG_TAG)) {
-      UpdateMessageBufferTagLine(b.get(), &lCurrentMessageSize, aux);
-    }
-    if (b[lCurrentMessageSize - 1] != CZ) {
-      b[lCurrentMessageSize++] = CZ;
-    }
-    savefile(b.get(), lCurrentMessageSize, pMessageRecord, aux);
-  } else {
-    bout << "|#6Aborted.\r\n";
-    pMessageRecord->stored_as = 0xffffffff;
   }
-  if (fsed) {
-    File::Remove(exted_filename);
-  }
-  if (!fsed) {
-    free(lin);
-  }
-  charbufferpointer = 0;
-  charbuffer[0] = '\0';
-  setiia(oiia);
-  grab_quotes(nullptr, nullptr);
+
+  return false;
 }
 
-void AddLineToMessageBuffer(char *pszMessageBuffer, const std::string& line_to_add, long *plBufferLength) {
-  strcpy(&(pszMessageBuffer[ *plBufferLength ]), line_to_add.c_str());
-  *plBufferLength += line_to_add.length();
-  strcpy(&(pszMessageBuffer[ *plBufferLength ]), "\r\n");
-  *plBufferLength += 2;
-}
-
-static void ReplaceString(char *pszResult, char *pszOld, char *pszNew) {
-  if (strlen(pszResult) - strlen(pszOld) + strlen(pszNew) >= LEN) {
-    return;
-  }
-  char* ss = strstr(pszResult, pszOld);
-  if (ss == nullptr) {
-    return;
-  }
-  ss[0] = '\0';
-
-  const string result = StringPrintf("%s%s%s", pszResult, pszNew, ss + strlen(pszOld));
-  strcpy(pszResult, result.c_str());
-}
-
-bool InternalMessageEditor(char* lin, int maxli, int* curli, int* setanon, string *title) {
-  bool abort, next;
-  char s[ 255 ];
-  char s1[ 255 ];
-
-  bout.nl(2);
-  bout << "|#9Enter message now, you can use |#2" << maxli << "|#9 lines.\r\n";
-  bout <<
-                     "|#9Colors: ^P-0\003""11\003""22\003""33\003""44\003""55\003""66\003""77\003""88\003""99\003""AA\003""BB\003""CC\003""DD\003""EE\003""FF\003""GG\003""HH\003""II\003""JJ\003""KK\003""LL\003""MM\003""NN\003""OO\003""PP\003""QQ\003""RR\003""SS\003""""\003""0";
-  bout <<
-                     "\003""TT\003""UU\003""VV\003""WW\003""XX\003""YY\003""ZZ\003""aa\003""bb\003""cc\003""dd\003""ee\003""ff\003""gg\003""hh\003""ii\003""jj\003""kk\003""ll\003""mm\003""nn\003""oo\003""pp\003""qq\003""rr\003""ss\003""tt\003""uu\003""vv\003""ww\003""xx\003""yy\003""zz\r\n";
-  bout.nl();
-  bout << "|#1Enter |#2/Q|#1 to quote previous message, |#2/HELP|#1 for other editor commands.\r\n";
-  strcpy(s, "[---=----=----=----=----=----=----=----]----=----=----=----=----=----=----=----]");
-  if (session()->user()->GetScreenChars() < 80) {
-    s[ session()->user()->GetScreenChars() ] = '\0';
-  }
-  bout.Color(7);
-  bout << s;
-  bout.nl();
-
-  bool bCheckMessageSize = true;
-  bool bSaveMessage = false;
-  bool done = false;
-  char szRollOverLine[ 81 ];
-  szRollOverLine[ 0 ] = '\0';
-  while (!done && !hangup) {
-    bool bAllowPrevious = (*curli > 0) ? true : false;
-    while (inli(s, szRollOverLine, 160, true, bAllowPrevious)) {
-      (*curli)--;
-      strcpy(szRollOverLine, &(lin[(*curli) * LEN]));
-      if (GetStringLength(szRollOverLine) > session()->user()->GetScreenChars() - 1) {
-        szRollOverLine[ session()->user()->GetScreenChars() - 2 ] = '\0';
-      }
-    }
-    if (hangup) {
-      done = true;
-    }
-    bCheckMessageSize = true;
-    if (s[0] == '/') {
-      if ((IsEqualsIgnoreCase(s, "/HELP")) ||
-          (IsEqualsIgnoreCase(s, "/H")) ||
-          (IsEqualsIgnoreCase(s, "/?"))) {
-        bCheckMessageSize = false;
-        printfile(EDITOR_NOEXT);
-      } else if (IsEqualsIgnoreCase(s, "/QUOTE") ||
-                 IsEqualsIgnoreCase(s, "/Q")) {
-        bCheckMessageSize = false;
-        if (quotes_ind != nullptr) {
-          get_quote(0);
-        }
-      } else if (IsEqualsIgnoreCase(s, "/LI")) {
-        bCheckMessageSize = false;
-        if (okansi()) {
-          next = false;
-        } else {
-          bout << "|#5With line numbers? ";
-          next = yesno();
-        }
-        abort = false;
-        for (int i = 0; (i < *curli) && !abort; i++) {
-          if (next) {
-            bout << i + 1 << ":" << wwiv::endl;
-          }
-          strcpy(s1, &(lin[i * LEN]));
-          int i3 = strlen(s1);
-          if (s1[i3 - 1] == 1) {
-            s1[i3 - 1] = '\0';
-          }
-          if (s1[0] == 2) {
-            strcpy(s1, &(s1[1]));
-            int i5 = 0;
-            int i4 = 0;
-            for (i4 = 0; i4 < GetStringLength(s1); i4++) {
-              if ((s1[i4] == 8) || (s1[i4] == 3)) {
-                --i5;
-              } else {
-                ++i5;
-              }
-            }
-            for (i4 = 0; (i4 < (session()->user()->GetScreenChars() - i5) / 2) && (!abort); i4++) {
-              osan(" ", &abort, &next);
-            }
-          }
-          pla(s1, &abort);
-        }
-        if (!okansi() || next) {
-          bout.nl();
-          bout << "Continue...\r\n";
-        }
-      } else if (IsEqualsIgnoreCase(s, "/ES") ||
-                 IsEqualsIgnoreCase(s, "/S")) {
-        bSaveMessage = true;
-        done = true;
-        bCheckMessageSize = false;
-      } else if (IsEqualsIgnoreCase(s, "/ESY") ||
-                 IsEqualsIgnoreCase(s, "/SY")) {
-        bSaveMessage = true;
-        done = true;
-        bCheckMessageSize = false;
-        *setanon = 1;
-      } else if (IsEqualsIgnoreCase(s, "/ESN") ||
-                 IsEqualsIgnoreCase(s, "/SN")) {
-        bSaveMessage = true;
-        done = true;
-        bCheckMessageSize = false;
-        *setanon = -1;
-      } else if (IsEqualsIgnoreCase(s, "/ABT") ||
-                 IsEqualsIgnoreCase(s, "/A")) {
-        done = true;
-        bCheckMessageSize = false;
-      } else if (IsEqualsIgnoreCase(s, "/CLR")) {
-        bCheckMessageSize = false;
-        *curli = 0;
-        bout << "Message cleared... Start over...\r\n\n";
-      } else if (IsEqualsIgnoreCase(s, "/RL")) {
-        bCheckMessageSize = false;
-        if (*curli) {
-          (*curli)--;
-          bout << "Replace:\r\n";
-        } else {
-          bout << "Nothing to replace.\r\n";
-        }
-      } else if (IsEqualsIgnoreCase(s, "/TI")) {
-        bCheckMessageSize = false;
-        if (okansi()) {
-          bout << "|#1Subj|#7: |#2" ;
-          inputl(title, 60, true);
-        } else {
-          bout << "       (---=----=----=----=----=----=----=----=----=----=----=----)\r\n";
-          bout << "|#1Subj|#7: |#2";
-          inputl(title, 60);
-        }
-        bout << "Continue...\r\n\n";
-      }
-      strcpy(s1, s);
-      s1[3] = '\0';
-      if (IsEqualsIgnoreCase(s1, "/C:")) {
-        s1[0] = 2;
-        strcpy((&s1[1]), &(s[3]));
-        strcpy(s, s1);
-      } else if (IsEqualsIgnoreCase(s1, "/SU") &&
-                 s[3] == '/' && *curli > 0) {
-        strcpy(s1, &(s[4]));
-        char *ss = strstr(s1, "/");
-        if (ss) {
-          char *ss1 = &(ss[1]);
-          ss[0] = '\0';
-          ReplaceString(&(lin[(*curli - 1) * LEN]), s1, ss1);
-          bout << "Last line:\r\n" << &(lin[(*curli - 1) * LEN]) << "\r\nContinue...\r\n";
-        }
-        bCheckMessageSize = false;
-      }
-    }
-
-    if (bCheckMessageSize) {
-      strcpy(&(lin[((*curli)++) * LEN]), s);
-      if (*curli == (maxli + 1)) {
-        bout << "\r\n-= No more lines, last line lost =-\r\n/S to save\r\n\n";
-        (*curli)--;
-      } else if (*curli == maxli) {
-        bout << "-= Message limit reached, /S to save =-\r\n";
-      } else if ((*curli + 5) == maxli) {
-        bout << "-= 5 lines left =-\r\n";
-      }
-    }
-  }
-  if (*curli == 0) {
-    bSaveMessage = false;
-  }
-  return bSaveMessage;
-}
-
-void GetMessageTitle(string *title, bool force_title) {
+static void GetMessageTitle(MessageEditorData& data) {
+  auto force_title = !data.title.empty();
   if (okansi()) {
-    if (!session()->IsNewMailWatiting()) {
+    if (!data.silent_mode) {
       bout << "|#2Title: ";
       bout.mpl(60);
     }
-    if (irt[0] != '\xAB' && irt[0]) {
-      char s1[ 255 ];
+    if (!data.title.empty()) {
+      bout << data.title;
+      return;
+    }
+    auto irt = a()->context().irt();
+    if (!irt.empty() && irt.front() != '\xAB') {
+      string s1;
       char ch = '\0';
-      StringTrim(irt);
-      if (strncasecmp(stripcolors(irt), "re:", 3) != 0) {
-        if (session()->IsNewMailWatiting()) {
-          sprintf(s1, "%s", irt);
-          irt[0] = '\0';
+      irt = stripcolors(StringTrim(a()->context().irt()));
+      if (strncasecmp(irt.c_str(), "re:", 3) != 0) {
+        if (data.silent_mode) {
+          s1 = irt;
+          a()->context().clear_irt();
         } else {
-          sprintf(s1, "Re: %s", irt);
+          s1 = StrCat("Re: ", irt);
         }
       } else {
-        sprintf(s1, "%s", irt);
+        s1 = a()->context().irt();
       }
-      s1[60] = '\0';
-      if (!session()->IsNewMailWatiting() && !force_title) {
+      if (s1.length() > 60) {
+        s1.resize(60);
+      }
+      if (!data.silent_mode && !force_title) {
         bout << s1;
-        ch = getkey();
+        ch = bout.getkey();
         if (ch == 10) {
-          ch = getkey();
+          ch = bout.getkey();
         }
       } else {
-        title->assign(s1);
+        data.title.assign(s1);
         ch = RETURN;
       }
       force_title = false;
@@ -480,95 +150,251 @@ void GetMessageTitle(string *title, bool force_title) {
         }
         bout << "|#2Title: ";
         bout.mpl(60);
-        char szRollOverLine[ 81 ];
-        sprintf(szRollOverLine, "%c", ch);
-        inli(s1, szRollOverLine, 60, true, false);
-        title->assign(s1);
+        auto rollover_line = StringPrintf("%c", ch);
+        inli(&s1, &rollover_line, 60, true, false);
+        data.title.assign(s1);
       } else {
         bout.nl();
-        title->assign(s1);
+        data.title.assign(s1);
       }
     } else {
-      inputl(title, 60);
+      data.title = input_text(60);
     }
   } else {
-    if (session()->IsNewMailWatiting() || force_title) {
-      title->assign(irt);
+    if (data.silent_mode || force_title) {
+      data.title = a()->context().irt();
     } else {
       bout << "       (---=----=----=----=----=----=----=----=----=----=----=----)\r\n";
       bout << "Title: ";
-      inputl(title, 60);
+      data.title = input_text(60);
     }
   }
 }
 
-void UpdateMessageBufferTheadsInfo(char *pszMessageBuffer, long *plBufferLength, const char *aux) {
-  if (!IsEqualsIgnoreCase(aux, "email")) {
-    time_t msgid = time(nullptr);
-    unsigned long targcrc = crc32buf(pszMessageBuffer, strlen(pszMessageBuffer));
-    const string msgid_buf = StringPrintf("%c0P %lX-%lX", 4, targcrc, msgid);
-    AddLineToMessageBuffer(pszMessageBuffer, msgid_buf, plBufferLength);
-    if (thread) {
-      thread [session()->GetNumMessagesInCurrentMessageArea() + 1 ].msg_num = static_cast< unsigned short>
-          (session()->GetNumMessagesInCurrentMessageArea() + 1);
-      strcpy(thread[session()->GetNumMessagesInCurrentMessageArea() + 1].message_code, &msgid_buf.c_str()[4]);
+static bool InternalMessageEditor(vector<string>& lin, int maxli, int* setanon, MessageEditorData& data) {
+  bool abort = false, next = false;
+  int curli = 0;
+
+  bout.nl(2);
+  bout << "|#9Enter message now, you can use |#2" << maxli << "|#9 lines.\r\n";
+  bout << "|#9Colors: ^P-0\003""11\003""22\003""33\003""44\003""55\003""66\003""77\003""88\003""99\003""0";
+  bout.nl();
+  bout << "|#9Enter |#2/Q|#9 to quote previous message, |#2/HELP|#9 for other editor commands.\r\n";
+
+  bout.Color(7);
+  string header = "[---=----=----=----=----=----=----=----]----=----=----=----=----=----=----=----]";
+  if (a()->user()->GetScreenChars() < 80) {
+    header.resize(a()->user()->GetScreenChars());
+  }
+  bout << header;
+  bout.nl();
+
+  string current_line;  
+  bool check_message_size = true;
+  bool save_message = false;
+  bool done = false;
+  string rollover_line;
+  std::deque<std::string> quoted_lines;
+  while (!done && !a()->hangup_) {
+    while (inli(&current_line, &rollover_line, 160, true, (curli > 0))) {
+      // returning true means we back spaced past the current line.
+      // intuitive eh?
+      curli--;
+      if (curli >= 0) {
+        // Don't keep retreating past line 0.
+        rollover_line = lin.at(curli);
+        if (size_int(rollover_line) > a()->user()->GetScreenChars() - 1) {
+          rollover_line.resize(a()->user()->GetScreenChars() - 2);
+        }
+      } else {
+        curli = 0;
+      }
     }
-    if (session()->threadID.length() > 0) {
-      const string threadid_buf = StringPrintf("%c0W %s", 4, session()->threadID.c_str());
-      AddLineToMessageBuffer(pszMessageBuffer, threadid_buf, plBufferLength);
-      if (thread) {
-        strcpy(thread[session()->GetNumMessagesInCurrentMessageArea() + 1].parent_code, &threadid_buf.c_str()[4]);
-        thread[ session()->GetNumMessagesInCurrentMessageArea() + 1 ].used = 1;
+    if (a()->hangup_) {
+      done = true;
+    }
+    check_message_size = true;
+    if (current_line[0] == '/') {
+      auto cmd = current_line;
+      StringUpperCase(&cmd);
+      if (((cmd == "/HELP")) ||
+          ((cmd == "/H")) ||
+          ((cmd == "/?"))) {
+        check_message_size = false;
+        print_help_file(EDITOR_NOEXT);
+      } else if ((cmd == "/QUOTE") ||
+                 (cmd == "/Q")) {
+        check_message_size = false;
+        quoted_lines = get_quote(data.to_name);
+          
+        while (!quoted_lines.empty()) {
+          current_line = quoted_lines.front();
+          quoted_lines.pop_front();
+          bout.bpla(current_line, &abort);
+          if (curli == size_int(lin)) {
+            // we're inserting a new line at the end.
+            lin.emplace_back(current_line);
+          } else if (curli < size_int(lin)) {
+            // replacing an older line.
+            lin.at(curli).assign(current_line);
+          }
+          curli++;
+        }
+      } else if ((cmd == "/LI")) {
+        check_message_size = false;
+        abort = false;
+        for (int i = 0; (i < curli) && !abort; i++) {
+          auto line = lin.at(i);
+          if (!line.empty() && line.back() == CA) {
+            line.pop_back();
+          }
+          if (!line.empty() && line.front() == CB) {
+            line = line.substr(1);
+            int i5 = 0;
+            // TODO(rushfan): Make a utility function to do this in strings.h
+            for (size_t i4 = 0; i4 < line.size(); i4++) {
+              if ((line[i4] == 8) || (line[i4] == 3)) {
+                --i5;
+              } else {
+                ++i5;
+              }
+            }
+            for (int i4 = 0; (i4 < (a()->user()->GetScreenChars() - i5) / 2) && (!abort); i4++) {
+              bout.bputs(" ", &abort, &next);
+            }
+          }
+          bout.bpla(line, &abort);
+        }
+        if (!okansi() || next) {
+          bout.nl();
+          bout << "Continue...\r\n";
+        }
+      } else if ((cmd == "/ES") ||
+                 (cmd == "/S")) {
+        save_message = true;
+        done = true;
+        check_message_size = false;
+      } else if ((cmd == "/ESY") ||
+                 (cmd == "/SY")) {
+        save_message = true;
+        done = true;
+        check_message_size = false;
+        *setanon = 1;
+      } else if ((cmd == "/ESN") ||
+                 (cmd == "/SN")) {
+        save_message = true;
+        done = true;
+        check_message_size = false;
+        *setanon = -1;
+      } else if ((cmd == "/ABT") ||
+                 (cmd == "/A")) {
+        done = true;
+        check_message_size = false;
+      } else if ((cmd == "/CLR")) {
+        check_message_size = false;
+        curli = 0;
+        bout << "Message cleared... Start over...\r\n\n";
+      } else if (cmd == "/RL") {
+        check_message_size = false;
+        if (curli) {
+          curli--;
+          bout << "Replace:\r\n";
+        } else {
+          bout << "Nothing to replace.\r\n";
+        }
+      } else if (cmd == "/TI") {
+        check_message_size = false;
+        bout << "|#1Subj|#7: |#2" ;
+        data.title = input_text(60);
+        bout << "Continue...\r\n\n";
+      }
+      if (cmd.length() > 3) {
+        cmd.resize(3);
+      }
+      if (cmd == "/C:") {
+        const auto centered_text = current_line.substr(3);
+        current_line = StringPrintf("%c%s", CB, centered_text.c_str());
+      } else if (cmd == "/SU" && current_line[3] == '/' && curli > 0) {
+        auto old_string = current_line.substr(4);
+        auto slash = old_string.find('/');
+        if (slash != string::npos) {
+          auto new_string = old_string.substr(slash + 1);
+          old_string.resize(slash);
+          // We've already advanced curli to point to the new row, so we need
+          // to back up one.
+          auto last_line = curli - 1;
+          auto temp = lin.at(last_line);
+          wwiv::strings::StringReplace(&temp, old_string, new_string);
+          lin[last_line] = temp;
+          bout << "Last line:\r\n" << lin.at(last_line) << "\r\nContinue...\r\n";
+        }
+        check_message_size = false;
+      }
+    }
+
+    if (check_message_size) {
+      if (curli == size_int(lin)) {
+        // we're inserting a new line at the end.
+        lin.emplace_back(current_line);
+      } else if (curli < size_int(lin)) {
+        // replacing an older line.
+        lin.at(curli).assign(current_line);
+      }
+      // Since we added the line, let's move forward.
+      curli++;
+      if (curli == (maxli + 1)) {
+        bout << "\r\n-= No more lines, last line lost =-\r\n/S to save\r\n\n";
+        curli--;
+      } else if (curli == maxli) {
+        bout << "-= Message limit reached, /S to save =-\r\n";
+      } else if ((curli + 5) == maxli) {
+        bout << "-= 5 lines left =-\r\n";
       }
     }
   }
+  if (curli == 0) {
+    save_message = false;
+  }
+  lin.resize(curli);
+  return save_message;
 }
 
-void UpdateMessageBufferInReplyToInfo(char *pszMessageBuffer, long *plBufferLength, const char *aux) {
-  if (irt_name[0] &&
-      !IsEqualsIgnoreCase(aux, "email") &&
-      xsubs[session()->GetCurrentReadMessageArea()].num_nets) {
-    for (int i = 0; i < xsubs[session()->GetCurrentReadMessageArea()].num_nets; i++) {
-      xtrasubsnetrec *xnp = &xsubs[session()->GetCurrentReadMessageArea()].nets[i];
-      if (net_networks[xnp->net_num].type == net_type_fidonet) {
-        const string buf = StringPrintf("0FidoAddr: %s", irt_name);
-        AddLineToMessageBuffer(pszMessageBuffer, buf, plBufferLength);
+
+static void UpdateMessageBufferInReplyToInfo(std::ostringstream& ss, bool is_email, const string& to_name, const string& title) {
+  if (!to_name.empty() && !is_email && !a()->current_sub().nets.empty()) {
+    for (const auto& xnp : a()->current_sub().nets) {
+      if (a()->net_networks[xnp.net_num].type == network_type_t::ftn) {
+        const auto buf = StringPrintf("%c0FidoAddr: %s", CD, to_name.c_str());
+        ss << buf << crlf;
         break;
       }
     }
   }
-  if ((strncasecmp("internet", session()->GetNetworkName(), 8) == 0) ||
-      (strncasecmp("filenet", session()->GetNetworkName(), 7) == 0)) {
-    if (session()->usenetReferencesLine.length() > 0) {
-      const string buf = StringPrintf("%c0RReferences: %s", CD, session()->usenetReferencesLine.c_str());
-      AddLineToMessageBuffer(pszMessageBuffer, buf, plBufferLength);
-      session()->usenetReferencesLine = "";
+  if (a()->current_net().type == network_type_t::internet ||
+      a()->current_net().type == network_type_t::news) {
+    if (a()->usenetReferencesLine.length() > 0) {
+      const auto buf = StringPrintf("%c0RReferences: %s", CD, a()->usenetReferencesLine.c_str());
+      ss << buf << crlf;
+      a()->usenetReferencesLine = "";
     }
-  }
-  if (irt[0] != '"') {
-    const string irt_buf = StringPrintf("RE: %s", irt);
-    AddLineToMessageBuffer(pszMessageBuffer, irt_buf, plBufferLength);
-    if (irt_sub[0]) {
-      const string irt_sub_buf = StringPrintf("ON: %s", irt_sub);
-      AddLineToMessageBuffer(pszMessageBuffer, irt_sub_buf, plBufferLength);
-    }
-  } else {
-    irt_sub[0] = '\0';
   }
 
-  if (irt_name[0] &&
-      !IsEqualsIgnoreCase(aux, "email")) {
-    const string irt_name_buf = StringPrintf("BY: %s", irt_name);
-    AddLineToMessageBuffer(pszMessageBuffer, irt_name_buf, plBufferLength);
+  // WTF is \xAB. FidoAddr sets it, but we don't want
+  // to add the RE: line when it's \xAB, so let's skip it.
+  if (!title.empty() && title.front() != '"' && title.front() != '\xAB') {
+    ss << "RE: " << title << crlf;
   }
-  AddLineToMessageBuffer(pszMessageBuffer, "", plBufferLength);
+
+  if (!to_name.empty() && !is_email) {
+    ss << "BY: " << to_name << crlf;
+  }
+  ss << crlf;
 }
 
 static string FindTagFileName() {
-  for (int i = 0; i < xsubs[session()->GetCurrentReadMessageArea()].num_nets; i++) {
-    xtrasubsnetrec *xnp = &xsubs[session()->GetCurrentReadMessageArea()].nets[i];
-    const char *nd = net_networks[xnp->net_num].dir;
-    string filename = StringPrintf("%s%s.tag", nd, xnp->stype);
+  for (const auto& xnp : a()->current_sub().nets) {
+    auto nd = a()->net_networks[xnp.net_num].dir;
+    auto filename = StrCat(nd, xnp.stype, ".tag");
     if (File::Exists(filename)) {
       return filename;
     }
@@ -576,11 +402,11 @@ static string FindTagFileName() {
     if (File::Exists(filename)) {
       return filename;
     }
-    filename = StringPrintf("%s%s.tag", syscfg.datadir, xnp->stype);
+    filename = FilePath(a()->config()->datadir(), StrCat(xnp.stype, ".tag"));
     if (File::Exists(filename)) {
       return filename;
     }
-    filename = StringPrintf("%s%s", syscfg.datadir, GENERAL_TAG);
+    filename = FilePath(a()->config()->datadir(), GENERAL_TAG);
     if (File::Exists(filename)) {
       return filename;
     }
@@ -588,30 +414,34 @@ static string FindTagFileName() {
   return "";
 }
 
-void UpdateMessageBufferTagLine(char *pszMessageBuffer, long *plBufferLength, const char *aux) {
-  if (session()->num_subs <= 0 && session()->GetCurrentReadMessageArea() <= 0) {
+static void UpdateMessageBufferTagLine(std::ostringstream& ss, bool is_email, const string& title, const string& to_name) {
+  if (a()->subs().subs().size() <= 0 && a()->GetCurrentReadMessageArea() <= 0) {
     return;
   }
-  const char szMultiMail[] = "Multi-Mail";
-  if (xsubs[session()->GetCurrentReadMessageArea()].num_nets &&
-      !IsEqualsIgnoreCase(aux, "email") &&
-      (!(subboards[session()->GetCurrentReadMessageArea()].anony & anony_no_tag)) &&
-      !IsEqualsIgnoreCase(irt, szMultiMail)) {
-		// tag is ok
-  } else {
-		return;
+  if (is_email) {
+    return;
+  }
+  if (a()->current_sub().nets.empty()) {
+    return;
+  }
+  if (a()->current_sub().anony & anony_no_tag) {
+    return;
+  }
+  if (iequals(to_name, "Multi-Mail")) {
+    return;
   }
 
-  const string filename = FindTagFileName();
+  const auto filename = FindTagFileName();
   if (filename.empty()) {
     // FindTagFileName returns an empty string if no tagname exists, so
     // just exit here since there is no tag.
+    return;
   }
   TextFile file(filename, "rb");
   if (file.IsOpen()) {
     int j = 0;
     string s;
-    while (!file.IsEndOfFile()) {
+    do {
       s.clear();
       file.ReadLine(&s);
       if (s.length() > 1 && s[s.length() - 2] == RETURN) {
@@ -624,39 +454,39 @@ void UpdateMessageBufferTagLine(char *pszMessageBuffer, long *plBufferLength, co
         s1 = StringPrintf("%c%c%s", CD, j + '2', s.c_str());
       }
       if (!j) {
-        AddLineToMessageBuffer(pszMessageBuffer, "1", plBufferLength);
+        ss << StringPrintf("%c1", CD) << crlf;
       }
-      AddLineToMessageBuffer(pszMessageBuffer, s1, plBufferLength);
+      ss << s1 << crlf;
       if (j < 7) {
         j++;
       }
-    }
+    } while (!file.IsEndOfFile());
     file.Close();
   }
 }
 
-void UpdateMessageBufferQuotesCtrlLines(char *pszMessageBuffer, long *plBufferLength) {
-  const string quotes_filename = StrCat(syscfgovr.tempdir, QUOTES_TXT);
+static void UpdateMessageBufferQuotesCtrlLines(std::ostringstream& ss) {
+  const auto quotes_filename = FilePath(a()->temp_directory(), QUOTES_TXT);
   TextFile file(quotes_filename, "rt");
   if (file.IsOpen()) {
-    char szQuoteText[ 255 ];
-    while (file.ReadLine(szQuoteText, sizeof(szQuoteText) - 1)) {
-      char *ss1 = strchr(szQuoteText, '\n');
-      if (ss1) {
-        *ss1 = '\0';
+    string quote_text;
+    while (file.ReadLine(&quote_text)) {
+      auto slash_n = quote_text.find('\n');
+      if (slash_n != string::npos) {
+        quote_text.resize(slash_n);
       }
-      if (strncmp(szQuoteText, "\004""0U", 3) == 0) {
-        AddLineToMessageBuffer(pszMessageBuffer, szQuoteText, plBufferLength);
+      if (starts_with(quote_text, "\004""0U")) {
+        ss << quote_text << crlf;
       }
     }
     file.Close();
   }
 
-  const string msginf_filename = StrCat(syscfgovr.tempdir, "msginf");
+  const auto msginf_filename = FilePath(a()->temp_directory(), "msginf");
   copyfile(quotes_filename, msginf_filename, false);
 }
 
-void GetMessageAnonStatus(bool *real_name, int *anony, int setanon) {
+static void GetMessageAnonStatus(bool *real_name, uint8_t *anony, int setanon) {
   // Changed *anony to anony
   switch (*anony) {
   case 0:
@@ -680,8 +510,7 @@ void GetMessageAnonStatus(bool *real_name, int *anony, int setanon) {
     break;
   case anony_enable_dear_abby: {
     bout.nl();
-    bout << "1. " << session()->user()->GetUserNameAndNumber(
-                         session()->usernum) << wwiv::endl;
+    bout << "1. " << a()->names()->UserName(a()->usernum) << wwiv::endl;
     bout << "2. Abby\r\n";
     bout << "3. Problemed Person\r\n\n";
     bout << "|#5Which? ";
@@ -707,4 +536,134 @@ void GetMessageAnonStatus(bool *real_name, int *anony, int setanon) {
     *anony = 0;
     break;
   }
+}
+
+static std::string ostringstream_to_wwivtext(const std::ostringstream& b) {
+  auto text = b.str();
+  if (text.back() != CZ) {
+    text.push_back(CZ);
+  }
+  return text;
+}
+
+bool inmsg(MessageEditorData& data) {
+
+  const auto oiia = setiia(std::chrono::milliseconds(0));
+  if (data.fsed_flags != FsedFlags::NOFSED && !okfsed()) {
+    data.fsed_flags = FsedFlags::NOFSED;
+  }
+
+  const auto exted_filename = FilePath(a()->temp_directory(), INPUT_MSG);
+  if (data.fsed_flags != FsedFlags::NOFSED) {
+    data.fsed_flags = FsedFlags::FSED;
+  }
+  if (use_workspace) {
+    if (!File::Exists(exted_filename)) {
+      use_workspace = false;
+    } else {
+      data.fsed_flags = FsedFlags::WORKSPACE;
+    }
+  }
+
+  wwiv::core::ScopeExit at_exit([=]() {
+    setiia(oiia);
+    // Might not need to do this anymore since quoting
+    // isn't so convoluted.
+    bout.charbufferpointer_ = 0;
+    bout.charbuffer[0] = '\0';
+    clear_quotes();
+    if (data.fsed_flags != FsedFlags::NOFSED) {
+      File::Remove(exted_filename);
+    }
+  });
+
+  bout.nl();
+
+  if (data.to_name.empty()) {
+    if (GetMessageToName(data)) {
+      bout.nl();
+    }
+  } else {
+    bout << "|#2To   : ";
+    bout.mpl(40);
+    bout << data.to_name << "\r\n";
+  }
+
+  GetMessageTitle(data);
+  if (data.title.empty() && data.need_title) {
+    bout << "|#6Aborted.\r\n";
+    return false;
+  }
+
+  vector<string> lin;
+  int setanon = 0;
+  auto save_message = false;
+  auto maxli = GetMaxMessageLinesAllowed();
+  if (data.fsed_flags == FsedFlags::NOFSED) {   // Use Internal Message Editor
+    save_message = InternalMessageEditor(lin, maxli, &setanon, data);
+  } else if (data.fsed_flags == FsedFlags::FSED) {   // Use Full Screen Editor
+    save_message = DoExternalMessageEditor(data, maxli, &setanon);
+    TextFile editor_file(exted_filename, "r");
+    lin = editor_file.ReadFileIntoVector();
+  } else if (data.fsed_flags == FsedFlags::WORKSPACE) { // "auto-send mail message"
+    use_workspace = false;
+    save_message = File::Exists(exted_filename);
+    if (save_message) {
+      if (!data.silent_mode) {
+        bout << "Reading in file...\r\n";
+      }
+      TextFile editor_file(exted_filename, "r");
+      lin = editor_file.ReadFileIntoVector();
+    }
+  }
+
+  if (!save_message) {
+    bout << "|#6Aborted.\r\n";
+    return false;
+  }
+  bout.backline();
+  if (!data.silent_mode) {
+    SpinPuts("Saving...", 2);
+  }
+  std::ostringstream b;
+
+  auto real_name = false;
+  GetMessageAnonStatus(&real_name, &data.anonymous_flag, setanon);
+  // Add author name
+  if (real_name) {
+    b << a()->user()->GetRealName() << crlf;
+  } else if (data.silent_mode) {
+    b << a()->config()->sysop_name() << " #1" << crlf;
+  } else {
+    b << a()->names()->UserName(a()->usernum, a()->current_net().sysnum) << crlf;
+  }
+
+  // Add date to message body
+  b << daten_to_wwivnet_time(daten_t_now()) << crlf;
+  UpdateMessageBufferQuotesCtrlLines(b);
+
+  if (!data.title.empty()) {
+    UpdateMessageBufferInReplyToInfo(b, data.is_email(), data.to_name, data.title);
+  }
+
+  // TODO(rushfan): This and the date above, etc. Will need to be transformed
+  // into structured data when moving to a proper message API.
+  //
+  // New in 5.x. Add PID to all message types. This will be for WWIV messages
+  // as well as FTN messages so we know the Program ID (WWIV) that created
+  // the message.
+  const auto control_d_zero = StringPrintf("%c0", CD);
+  b << control_d_zero << "PID: WWIV " << wwiv_version << beta_version << crlf;
+
+  // iterate through the lines in "lin" and append them to 'b'
+  for (const auto& l : lin) {
+    b << l << crlf;
+  }
+
+  if (a()->HasConfigFlag(OP_FLAGS_MSG_TAG)) {
+    UpdateMessageBufferTagLine(b, data.is_email(), data.title, data.to_name);
+  }
+
+  data.text = ostringstream_to_wwivtext(b);
+  return true;
 }

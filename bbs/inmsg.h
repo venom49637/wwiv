@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,12 +18,9 @@
 #ifndef __INCLUDED_BBS_INMSG_H__
 #define __INCLUDED_BBS_INMSG_H__
 
-#include <string>
+#include "bbs/external_edit.h"
+#include "bbs/message_editor_data.h"
 
-#include "sdk/vardec.h"
-
-void inmsg(messagerec * pMessageRecord, std::string* title, int *anony, bool needtitle, const char *aux, int fsed,
-           const char *pszDestination, int flags, bool force_title = false);
-void AddLineToMessageBuffer(char *pszMessageBuffer, const std::string& line_to_add, long *plBufferLength);
+bool inmsg(wwiv::bbs::MessageEditorData& data);
 
 #endif  // __INCLUDED_BBS_INMSG_H__

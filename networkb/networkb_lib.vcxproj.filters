@@ -17,15 +17,6 @@
     <ClCompile Include="transfer_file.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="socket_connection.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="socket_exceptions.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="connection.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="wfile_transfer_file.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -38,24 +29,30 @@
     <ClCompile Include="ppp_config.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="callout.cpp">
+    <ClCompile Include="net_log.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="cram.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="net_util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="packets.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="file_manager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="remote.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="connection.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="binkp.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="transfer_file.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="socket_connection.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="socket_exceptions.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="wfile_transfer_file.h">
@@ -77,6 +74,30 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="receive_file.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="net_log.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="contact.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="cram.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="net_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="packets.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fido_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="file_manager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="remote.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

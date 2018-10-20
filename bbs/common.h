@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -20,51 +20,47 @@
 #ifndef __INCLUDED_COMMON_H__
 #define __INCLUDED_COMMON_H__
 
-#pragma pack(push, 1)
+#include "core/wwivport.h"
+#include "sdk/wwivcolors.h"
+#include <string>
+
+// Defines for listplus
+constexpr int LP_LIST_DIR = 0;
+constexpr int LP_SEARCH_ALL = 1;
+constexpr int LP_NSCAN_DIR = 2;
+constexpr int LP_NSCAN_NSCAN = 3;
+
+constexpr int ALL_DIRS = 0;
+constexpr int THIS_DIR = 1;
+constexpr int NSCAN_DIRS = 2;
+
+constexpr int WWIV_LISTPLUS_NORMAL_HIGHLIGHT =
+    (static_cast<uint8_t>(wwiv::sdk::Color::YELLOW) +
+     (static_cast<uint8_t>(wwiv::sdk::Color::BLACK) << 4));
+constexpr int WWIV_LISTPLUS_NORMAL_MENU_ITEM =
+    (static_cast<uint8_t>(wwiv::sdk::Color::CYAN) +
+     (static_cast<uint8_t>(wwiv::sdk::Color::BLACK) << 4));
+constexpr int WWIV_LISTPLUS_CURRENT_HIGHLIGHT =
+    (static_cast<uint8_t>(wwiv::sdk::Color::RED) +
+     (static_cast<uint8_t>(wwiv::sdk::Color::LIGHTGRAY) << 4));
+constexpr int WWIV_LISTPLUS_CURRENT_MENU_ITEM =
+    (static_cast<uint8_t>(wwiv::sdk::Color::BLACK) +
+     (static_cast<uint8_t>(wwiv::sdk::Color::LIGHTGRAY) << 4));
 
 struct side_menu_colors {
-  int normal_highlight;   // used to all be unsigned.
-  int normal_menu_item;
-  int current_highlight;
-  int current_menu_item;
+  int normal_highlight = WWIV_LISTPLUS_NORMAL_HIGHLIGHT;
+  int normal_menu_item = WWIV_LISTPLUS_NORMAL_MENU_ITEM;
+  int current_highlight = WWIV_LISTPLUS_CURRENT_HIGHLIGHT;
+  int current_menu_item = WWIV_LISTPLUS_CURRENT_MENU_ITEM;
 };
-
-
 
 struct search_record {
-  char filemask[13];
+  std::string filemask;
+  daten_t nscandate{0};
+  std::string search;
 
-  unsigned long nscandate;
-
-  char search[81];
-
-  int alldirs;
-  int search_extended;
+  int alldirs{0};
+  bool search_extended{false};
 };
-
-
-#define MENUTYPE_REGULAR   0
-#define MENUTYPE_PULLDOWN  1
-
-#define HOTKEYS_ON  0
-#define HOTKEYS_OFF 1
-
-
-struct user_config {
-  char name[31];          // verify against a user
-
-  unsigned long status;
-
-  unsigned long lp_options;
-  unsigned char lp_colors[32];
-
-  char szMenuSet[9];   // Selected AMENU set to use
-  char cHotKeys;       // Use hot keys in AMENU
-  char cMenuType;      // Use pulldown or regular menus
-
-  char junk[118];   // AMENU took 11 bytes from here
-};
-
-#pragma pack(pop)
 
 #endif // __INCLUDED_COMMON_H__

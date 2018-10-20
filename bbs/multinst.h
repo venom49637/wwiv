@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -20,7 +20,7 @@
 
 #include <string>
 
-void make_inst_str(int nInstanceNum, std::string *result, int nInstanceFormat);
+std::string make_inst_str(int nInstanceNum, int nInstanceFormat);
 void multi_instance();
 int  inst_ok(int loc, int subloc);
 

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,10 +18,18 @@
 #ifndef __INCLUDED_BBS_QUOTE_H__
 #define __INCLUDED_BBS_QUOTE_H__
 
+#include <string>
+#include <deque>
+
 #include "sdk/vardec.h"
 
-void grab_quotes(messagerec * m, const char *aux);
-void auto_quote(char *org, long len, int type, time_t tDateTime);
-void get_quote(int fsed);
+void grab_quotes(messagerec* m, const std::string& aux, const std::string& to_name);
+void clear_quotes();
+void auto_quote(char *org, const std::string& to_name, long len, int type, time_t tDateTime);
+std::deque<std::string> get_quote(const std::string& reply_to_name);
+
+// [[ VisibleForTesting ]]
+std::string GetQuoteInitials(const std::string& reply_to_name);
+
 
 #endif  // __INCLUDED_BBS_QUOTE_H__

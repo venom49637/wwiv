@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,25 +17,31 @@
 /*                                                                        */
 /**************************************************************************/
 #include <iostream>
+#include <string>
 
 #include "gtest/gtest.h"
 #include "bbs_test/bbs_helper.h"
 
 #include "bbs/utility.h"
-#include "bbs/platform/platformfcns.h"
+#include "bbs/make_abs_cmd.h"
+#include "core/strings.h"
 
 using std::cout;
 using std::endl;
 using std::string;
 
+using wwiv::strings::StrCat;
+
+using namespace wwiv::core;
+
 class MakeAbsTest : public ::testing::Test {
 protected:
-    virtual void SetUp() {
-        helper.SetUp();
-        root = helper.app_->GetHomeDir();
-    }
-    BbsHelper helper;
-    string root;
+  virtual void SetUp() {
+    helper.SetUp();
+    root = helper.app_->bbsdir();
+  }
+  BbsHelper helper;
+  string root;
 };
 
 #ifdef _WIN32
@@ -43,7 +49,7 @@ protected:
 TEST_F(MakeAbsTest, NotUnderRoot) {
   const string expected = "c:\\windows\\system32\\cmd.exe foo";
   string cmdline = "cmd foo";
-  WWIV_make_abs_cmd(root, &cmdline);
+  make_abs_cmd(root, &cmdline);
   EXPECT_STRCASEEQ(expected.c_str(), cmdline.c_str());
 }
 
@@ -51,16 +57,17 @@ TEST_F(MakeAbsTest, UnderRoot) {
   const string foo = helper.files().CreateTempFile("foo.exe", "");
   const string expected = foo + " bar";
   string cmdline = "foo bar";
-  WWIV_make_abs_cmd(root, &cmdline);
+  make_abs_cmd(root, &cmdline);
   EXPECT_STRCASEEQ(expected.c_str(), cmdline.c_str());
 }
 
 #else 
 
 TEST_F(MakeAbsTest, Smoke) {
-  const string expected = "/bin/ls foo";
+  File f (FilePath(helper.files().TempDir(), "ls foo"));
+  string expected = f.full_pathname();
   string cmdline = "ls foo";
-  WWIV_make_abs_cmd(root, &cmdline);
+  make_abs_cmd(root, &cmdline);
   EXPECT_STRCASEEQ(expected.c_str(), cmdline.c_str());
 }
 

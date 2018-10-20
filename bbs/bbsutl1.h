@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -20,8 +20,17 @@
 
 #include <string>
 
-bool AllowLocalSysop();
-void parse_email_info(const std::string& emailAddress, int *pUserNumber, int *pSystemNumber);
+void parse_email_info(const std::string& emailAddress, uint16_t *pUserNumber, uint16_t *pSystemNumber);
+
+/**
+ * Creates string of form (#un | user_name) @sn[.network_name].
+ * example: Rushfan @1.rushfan or #1 @1.rushnet or #1 @1 
+ */
+std::string username_system_net_as_string(uint16_t un, const std::string& user_name,
+                                          uint16_t sn, const std::string& network_name);
+std::string username_system_net_as_string(uint16_t un, const std::string& user_name,
+                                          uint16_t sn);
+
 bool ValidateSysopPassword();
 void hang_it_up();
 bool play_sdf(const std::string& soundFileName, bool abortable);

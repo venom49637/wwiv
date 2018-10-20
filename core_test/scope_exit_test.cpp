@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*               Copyright (C)2014-2015 WWIV Software Services            */
+/*                              WWIV Version 5.x                          */
+/*               Copyright (C)2014-2017, WWIV Software Services           */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,10 +23,25 @@ using wwiv::core::ScopeExit;
 
 TEST(ScopeExitTest, Basic) {
   bool committed = false;
-  bool rolledback = false;
   auto f = [&] { committed = true; };
   {
     ScopeExit e(f);
+    ASSERT_FALSE(committed);
+  }
+  ASSERT_TRUE(committed);
+}
+
+TEST(ScopeExitTest, Empty) {
+  // Should not crash on exit.
+  ScopeExit e;
+}
+
+TEST(ScopeExitTest, Swap) {
+  bool committed = false;
+  auto f = [&] { committed = true; };
+  {
+    ScopeExit e;
+    e.swap(f);
     ASSERT_FALSE(committed);
   }
   ASSERT_TRUE(committed);

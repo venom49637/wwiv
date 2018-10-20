@@ -1,176 +1,181 @@
 @rem **************************************************************************
-@rem WWIV 5.0 Build Script.
+@rem WWIV Build Script.
 @rem
 @rem Required Variables:
 @rem WORKSPACE - git root directory
 @rem BUILD_NUMBER - Jenkins Build number
-@rem TEXT_TRANSFORM - path to text transform tool from visual studio
 @rem
 @rem Installed Software:
 @rem   7-Zip [C:\Program Files\7-Zip\7z.exe]
 @rem   VS 2013 [C:\Program Files (x86)\Microsoft Visual Studio 12.0]
 @rem   msbuild [in PATH, set by vcvarsall.bat]
+@rem   sed [in PATH]
 @rem 
 @rem **************************************************************************
 
 setlocal
+@echo off
 
-@if exist "%ProgramFiles(x86)%\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" (
-  call "%ProgramFiles(x86)%\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86
+del wwiv-*.zip
+
+if /I "%LABEL%"=="win-x86" (
+	@echo "Setting x86 (32-bit) Architecture"
+	set ARCH=x86
+	set NUM_BITS=32
 )
-
-@if exist "%ProgramFiles%\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" (
-  call "%ProgramFiles%\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86
+if /I "%LABEL%"=="win-x64" (
+	@echo "Setting x64 (64-bit) Architecture"
+	set ARCH=x64
+	set NUM_BITS=64
 )
 
 set ZIP_EXE="C:\Program Files\7-Zip\7z.exe"
-set RELEASE_ZIP=%WORKSPACE%\wwiv-build-win-%BUILD_NUMBER%.zip
-echo TextTransform: %TEXT_TRANSFORM%
-echo Workspace:     %WORKSPACE%         
-echo Build Number:  %BUILD_NUMBER%
-echo Archive:       %RELEASE_ZIP%
+set WWIV_RELEASE=5.4
+set WWIV_FULL_RELEASE=5.4.0
+set RELEASE_ZIP=%WORKSPACE%\wwiv-win-%ARCH%-%WWIV_RELEASE%.%BUILD_NUMBER%.zip
+set STAGE_DIR=%WORKSPACE%\staging
+set WWIV_CMAKE_DIR=%WORKSPACE%\_build
+echo =============================================================================
+echo Workspace:         %WORKSPACE% 
+echo Label:             %LABEL%
+echo Architecture:      %ARCH%
+echo WWIV Full Release: %WWIV_FULL_RELEASE%        
+echo WWIV Release:      %WWIV_RELEASE%        
+echo Build Number:      %BUILD_NUMBER%
+echo WWIV CMake Root:   %WWIV_CMAKE_DIR%
+echo Archive:           %RELEASE_ZIP%
+echo Staging Dir:       %STAGE_DIR%
+echo =============================================================================
 
-@rem Build BBS, init, telnetserver
+@if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
+  echo "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+  call "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+)
+
+@if exist "%ProgramFiles%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
+  echo "%ProgramFiles%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+  call "%ProgramFiles%\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+)
+
+@if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+  echo "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+  call "%ProgramFiles(x86)%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+)
+
+@if exist "%ProgramFiles%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+  echo "%ProgramFiles%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+  call "%ProgramFiles%\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" %ARCH%
+)
+
+echo on
+rem Turn echo back on now.
+
+if not exist %WWIV_CMAKE_DIR% (
+  echo Creating %WWIV_CMAKE_DIR%
+  mkdir %WWIV_CMAKE_DIR%
+)
+
+@rem Build Cryptlib 1st.
+echo:
+echo * Building Cryptlib (zip/unzip)
+cd %WORKSPACE%\deps\cl342
+set cryptlib_platform=Win32
+if /i "%arch%"=="x64" (set cryptlib_platform=x64)
+msbuild crypt32.vcxproj /t:Build /p:Configuration=Release /p:Platform=%cryptlib_platform% || exit /b
+
+@rem Build BBS, wwivconfig
 echo:
 echo * Updating the Build Number in version.cpp
 cd %WORKSPACE%\core
 
-setlocal
-rem
-rem When LIB contains paths that do not exist, then TextTransform
-rem fails, so we'll clear it out while running TEXT_TRANSFORM
-rem
-set LIB=
-%TEXT_TRANSFORM% -a !!version!%BUILD_NUMBER% version.template || exit /b
-endlocal
+%SED% -i -e "s@.development@.%BUILD_NUMBER%@" version.cpp
 
 echo:
-echo * Building CORE
-cd %WORKSPACE%\core
-msbuild core.vcxproj /t:Build /p:Configuration=Release || exit /b
+echo * Building WWIV
+cd %WWIV_CMAKE_DIR%
+cmake -G "Ninja" -DCMAKE_BUILD_TYPE:STRING=MinSizeRel %WORKSPACE% || exit /b
+cmake --build .   || exit /b
 
-echo:
-echo * Building BBS
-cd %WORKSPACE%\bbs
-msbuild bbs_lib.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild bbs.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building WWIV5TelnetServer
-cd %WORKSPACE%\WWIV5TelnetServer\WWIV5TelnetServer
-msbuild WWIV5TelnetServer.csproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building INITLIB
-cd %WORKSPACE%\initlib
-msbuild initlib.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building INIT
-cd %WORKSPACE%\init
-msbuild init.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building NETWORKB
-cd %WORKSPACE%\networkb
-msbuild networkb.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building NETWORK
-cd %WORKSPACE%\network
-msbuild network.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-echo:
-echo * Building FIX
-cd %WORKSPACE%\fix
-msbuild fix.vcxproj /t:Build /p:Configuration=Release /property:EnableEnhancedInstructionSet=NoExtensions
-
-@rem build WINS
-echo:
-echo * Building WINS
-cd %WORKSPACE%\wins
-
-msbuild exp\exp.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild networkp\networkp.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild news\news.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild pop\pop.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild pppurge\pppurge.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild ppputil\ppputil.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild qotd\qotd.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild uu\uu.vcxproj /t:Build /p:Configuration=Release || exit /b
-
-
-@rem build DEPS
+@rem Building bits from the build tree.
+@rem build InfoZIP Zip/UnZip
 echo:
 echo * Building INFOZIP (zip/unzip)
 cd %WORKSPACE%\deps\infozip
 
-msbuild unzip60\win32\vc8\unzip.vcxproj /t:Build /p:Configuration=Release || exit /b
-msbuild zip30\win32\vc6\zip.vcxproj /t:Build /p:Configuration=Release || exit /b
+@rem
+@rem Always build this as 32-bit binaries nomatter what. 
+@rem
+msbuild unzip60\win32\vc8\unzip.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32 || exit /b
+msbuild zip30\win32\vc6\zip.vcxproj /t:Build /p:Configuration=Release /p:Platform=Win32 || exit /b
 
 cd %WORKSPACE%\
-if not exist %WORKSPACE%\release (
-  echo Creating %WORKSPACE\release
-  mkdir %WORKSPACE%\release
+if not exist %STAGE_DIR% (
+  echo Creating %STAGE_DIR%
+  mkdir %STAGE_DIR%
 )
-del /q %WORKSPACE%\release
-del wwiv-build-*.zip
+del /q %STAGE_DIR%
+del wwiv-*.zip
 
 echo:
-echo * Creating Menus (EN)
-cd %WORKSPACE%\bbs\admin\menus\en
-%ZIP_EXE% a -tzip -r %WORKSPACE%\release\en-menus.zip *
+echo * Creating inifiles.zip
+cd %WORKSPACE%\bbs\admin\inifiles
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\inifiles.zip *
 
 echo:
-echo * Creating Regions
-cd %WORKSPACE%\bbs\admin
-%ZIP_EXE% a -tzip -r %WORKSPACE%\release\zip-city.zip zip-city\*
-%ZIP_EXE% a -tzip -r %WORKSPACE%\release\regions.zip regions\*
+echo * Creating data.zip
+cd %WORKSPACE%\bbs\admin\data
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\data.zip *
+
+echo:
+echo * Creating gfiles.zip
+cd %WORKSPACE%\bbs\admin\gfiles
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\gfiles.zip *
 
 cd %WORKSPACE%\
 echo:
 echo * Copying BBS files to staging directory.
-copy /v/y %WORKSPACE%\bbs\Release\bbs.exe %WORKSPACE%\release\bbs.exe
-copy /v/y %WORKSPACE%\WWIV5TelnetServer\WWIV5TelnetServer\bin\release\WWIV5TelnetServer.exe %WORKSPACE%\release\WWIV5TelnetServer.exe
-copy /v/y %WORKSPACE%\init\Release\init.exe %WORKSPACE%\release\init.exe
-copy /v/y %WORKSPACE%\network\Release\network.exe %WORKSPACE%\release\network.exe
-copy /v/y %WORKSPACE%\networkb\Release\networkb.exe %WORKSPACE%\release\networkb.exe
-copy /v/y %WORKSPACE%\fix\Release\fix.exe %WORKSPACE%\release\fix.exe
-copy /v/y %WORKSPACE%\bbs\admin\* %WORKSPACE%\release\
-
-echo:
-echo * Copying WINS files to staging area
-set WINS=%WORKSPACE%\wins
-copy /v/y %WINS%\exp\Release\exp.exe %WORKSPACE%\release\exp.exe
-copy /v/y %WINS%\networkp\Release\networkp.exe %WORKSPACE%\release\networkp.exe
-copy /v/y %WINS%\news\Release\news.exe %WORKSPACE%\release\news.exe
-copy /v/y %WINS%\pop\Release\pop.exe %WORKSPACE%\release\pop.exe
-copy /v/y %WINS%\pppurge\Release\pppurge.exe %WORKSPACE%\release\pppurge.exe
-copy /v/y %WINS%\ppputil\Release\ppputil.exe %WORKSPACE%\release\ppputil.exe
-copy /v/y %WINS%\qotd\Release\qotd.exe %WORKSPACE%\release\qotd.exe
-copy /v/y %WINS%\uu\Release\uu.exe %WORKSPACE%\release\uu.exe
-
-echo:
-echo * Copying WINS sample filesto staging area
-copy /v/y %WINS%\admin\* %WORKSPACE%\release\
+copy /v/y %WORKSPACE%\deps\cl342\Release\cl%NUM_BITS%.dll %STAGE_DIR%\cl%NUM_BITS%.dll || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\bbs\bbs.exe %STAGE_DIR%\bbs.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\wwivconfig\wwivconfig.exe %STAGE_DIR%\wwivconfig.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\network\network.exe %STAGE_DIR%\network.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\network1\network1.exe %STAGE_DIR%\network1.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\network2\network2.exe %STAGE_DIR%\network2.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\network3\network3.exe %STAGE_DIR%\network3.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\networkb\networkb.exe %STAGE_DIR%\networkb.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\networkc\networkc.exe %STAGE_DIR%\networkc.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\networkf\networkf.exe %STAGE_DIR%\networkf.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\wwivd\wwivd.exe %STAGE_DIR%\wwivd.exe || exit /b
+copy /v/y %WWIV_CMAKE_DIR%\wwivutil\wwivutil.exe %STAGE_DIR%\wwivutil.exe || exit /b
+copy /v/y %WORKSPACE%\bbs\admin\* %STAGE_DIR%\
+copy /v/y %WORKSPACE%\bbs\admin\win32\* %STAGE_DIR%\
 
 echo:
 echo * Copying INFOZIP files to staging area
 set INFOZIP=%WORKSPACE%\deps\infozip
 dir %INFOZIP%\unzip60\win32\vc8\unzip__Win32_Release\unzip.exe
 dir %INFOZIP%\zip30\win32\vc6\zip___Win32_Release\zip.exe
-copy /v/y %INFOZIP%\unzip60\win32\vc8\unzip__Win32_Release\unzip.exe %WORKSPACE%\release\unzip.exe
-copy /v/y %INFOZIP%\zip30\win32\vc6\zip___Win32_Release\zip.exe %WORKSPACE%\release\zip.exe
+copy /v/y %INFOZIP%\unzip60\win32\vc8\unzip__Win32_Release\unzip.exe %STAGE_DIR%\unzip.exe
+copy /v/y %INFOZIP%\zip30\win32\vc6\zip___Win32_Release\zip.exe %STAGE_DIR%\zip.exe
 
+echo:
+echo * Creating scripts.zip
+cd %WORKSPACE%\bbs\admin\scripts
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\scripts.zip *
+
+echo:
+echo * Creating Regions
+cd %WORKSPACE%\bbs\admin
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\zip-city.zip zip-city\*
+%ZIP_EXE% a -tzip -r %STAGE_DIR%\regions.zip regions\*
 
 echo:
 echo * Creating build.nfo file
 echo Build URL %BUILD_URL% > release\build.nfo
-echo Subversion Build: %BUILD_NUMBER% >> release\build.nfo
+echo Build: %WWIV_FULL_RELEASE%.%BUILD_NUMBER% >> release\build.nfo
 
 echo:
 echo * Creating release archive: %RELEASE_ZIP%
-cd %WORKSPACE%\release
+cd %STAGE_DIR%
 %ZIP_EXE% a -tzip -y %RELEASE_ZIP%
 
 echo:
@@ -181,4 +186,3 @@ echo ** Archive File: %RELEASE_ZIP%
 echo ** Archive contents:
 %ZIP_EXE% l %RELEASE_ZIP%
 endlocal
-

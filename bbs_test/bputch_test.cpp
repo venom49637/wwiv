@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -22,7 +22,7 @@
 #include <memory>
 #include <string>
 
-#include "bbs/bputch.h"
+#include "bbs/output.h"
 #include "bbs/bbs.h"
 #include "bbs_test/bbs_helper.h"
 #include "core/strings.h"
@@ -32,7 +32,7 @@ using std::cout;
 using std::endl;
 using std::string;
 
-class BPutchFileTest : public ::testing::Test {
+class BPutchTest : public ::testing::Test {
 protected:
     virtual void SetUp() {
         helper.SetUp();
@@ -41,7 +41,7 @@ protected:
     virtual int Puts(string s) {
       int count = 0;
       for (const auto& c : s) {
-        count += bputch(c);
+        count += bout.bputch(c);
       }
       return count;
     }
@@ -49,20 +49,13 @@ protected:
     BbsHelper helper;
 };
 
-TEST_F(BPutchFileTest, SingleLetter) {
-  EXPECT_EQ(1, bputch('A'));
+TEST_F(BPutchTest, SingleLetter) {
+  EXPECT_EQ(1, bout.bputch('A'));
   EXPECT_STREQ("A", helper.io()->captured().c_str());
 }
 
-TEST_F(BPutchFileTest, MultipleLetters) {
+TEST_F(BPutchTest, MultipleLetters) {
   const string kHelloWorld = "Hello World\r\n";
   EXPECT_EQ(kHelloWorld.size(), Puts(kHelloWorld));
-  EXPECT_EQ(kHelloWorld, helper.io()->captured());
-}
-
-TEST_F(BPutchFileTest, SinglePipe) {
-  const string kHelloWorld = "Hello World\r\n";
-  const string s = "|#1Hello World\r\n";
-  EXPECT_EQ(kHelloWorld.size(), Puts(s));
   EXPECT_EQ(kHelloWorld, helper.io()->captured());
 }

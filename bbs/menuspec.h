@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,8 +18,8 @@
 #ifndef __INCLUDED_BBS_MENUSPEC_H__
 #define __INCLUDED_BBS_MENUSPEC_H__
 
-int  MenuDownload(const char *pszDirFName, const char *pszFName, bool bFreeDL, bool bTitle);
-int  FindDN(const char *pszFName);
+int MenuDownload(const std::string& pszDirFName, const std::string& pszFName, bool bFreeDL,
+                 bool bTitle);
 bool MenuRunDoorName(const char *pszDoor, bool bFree);
 bool MenuRunDoorNumber(int nDoorNumber, bool bFree);
 int  FindDoorNo(const char *pszDoor);
@@ -31,7 +31,5 @@ void SetDirConf(int iConf);
 void EnableConf();
 void DisableConf();
 void SetNewScanMsg();
-void ReadMessages();
-void ReadSelectedMessages(int iWhich, int iWhere);
 
 #endif  // __INCLUDED_BBS_MENUSPEC_H__

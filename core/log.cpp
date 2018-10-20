@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*             Copyright (C)2014-2015 WWIV Software Services              */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2014-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -15,91 +15,211 @@
 /*    either  express  or implied.  See  the  License for  the specific   */
 /*    language governing permissions and limitations under the License.   */
 /**************************************************************************/
+
 #include "core/log.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
-#include <map>
+#include <memory>
 #include <string>
+#include <unordered_map>
 
+#include "core/command_line.h"
+#include "core/datetime.h"
 #include "core/file.h"
+#include "core/stl.h"
 #include "core/strings.h"
+#include "core/textfile.h"
 #include "core/version.h"
 
-using std::clog;
-using std::endl;
-using std::map;
 using std::ofstream;
 using std::string;
+using namespace wwiv::core;
 using namespace wwiv::strings;
 
 namespace wwiv {
 namespace core {
 
-// static
-map<string, string> Logger::fn_map_;
+static constexpr char log_date_format[] = "%F %T";
 
-Logger::Logger() : Logger("I") {}
+static std::shared_ptr<Appender> console_appender;
+static std::shared_ptr<Appender> logfile_appender;
+LoggerConfig Logger::config_;
 
-Logger::Logger(const string& kind) : kind_(kind), display_fn_(Logger::DefaultDisplay) { 
-  stream_ << kind_ << date_time() << " "; 
+class ConsoleAppender : public Appender {
+  virtual bool append(const std::string& message) const {
+    std::cerr << message << std::endl;
+    return true;
+  }
+};
+
+class LogFileAppender : public Appender {
+public:
+  LogFileAppender(const std::string& fn) : filename_(fn) {}
+  virtual bool append(const std::string& message) const {
+    // Not super performant, but we'll start here and see how far this
+    // gets us.
+    if (message.empty()) {
+      return true;
+    }
+    TextFile out(filename_, "a");
+    if (!out.IsOpen()) {
+      // We don't want to crash if we can't log, but what
+      // should we do instead?
+      return false;
+    }
+    return out.WriteLine(message) > 0;
+  }
+
+private:
+  const std::string filename_;
+};
+
+const std::string FormatLogLevel(LoggerLevel l, int v) {
+  if (l == LoggerLevel::verbose) {
+    return StrCat("VER-", v);
+  }
+  static const std::unordered_map<LoggerLevel, std::string, wwiv::stl::enum_hash> map = {
+      {LoggerLevel::ignored, ""},
+      {LoggerLevel::start, "START"},
+      {LoggerLevel::debug, "DEBUG"},
+      {LoggerLevel::verbose, "VER- "},  
+      {LoggerLevel::error, "ERROR"},
+      {LoggerLevel::info, "INFO "},
+      {LoggerLevel::warning, "WARN "}, 
+      {LoggerLevel::fatal, "FATAL"},
+  };
+  return map.at(l);
 }
+
+std::string Logger::FormatLogMessage(LoggerLevel level, int verbosity, const std::string& msg) {
+  return StrCat(config_.timestamp_fn_(), FormatLogLevel(level, verbosity), " ", msg);
+}
+
+Logger::Logger(LoggerLevel level, int verbosity) : level_(level), verbosity_(verbosity) {}
 
 Logger::~Logger() {
-  const string filename = Logger::fn_map_[kind_];
-  ofstream out(filename, ofstream::app);
-  if (!out) {
-    clog << "Unable to open log file: '" << filename << "'" << endl;
-  } else {
-    out << stream_.str() << endl;
+  if (level_ == LoggerLevel::verbose) {
+    if (!vlog_is_on(verbosity_)) {
+      return;
+    }
   }
-  display_fn_(stream_.str());
-}
-
-static std::string exit_filename;
-
-//static
-void Logger::ExitLogger() {
-  time_t t = time(nullptr);
-  Logger() << exit_filename << " exiting at " << asctime(localtime(&t));
+  const auto msg = FormatLogMessage(level_, verbosity_, ss_.str());
+  const auto& appenders = config_.log_to[level_];
+  for (auto appender : appenders) {
+    appender->append(msg);
+  }
+  if (level_ == LoggerLevel::fatal) {
+    abort();
+  }
 }
 
 // static
-void Logger::DefaultDisplay(const std::string& s) {
-  clog << s << endl;
+bool Logger::vlog_is_on(int level) { return level <= config_.cmdline_verbosity; }
+
+// static
+void Logger::StartupLog(int argc, char* argv[]) {
+  DateTime dt = DateTime::now();
+  LOG(STARTUP) << config_.exit_filename << " version " << wwiv_version << beta_version << " ("
+               << wwiv_date << ")";
+  LOG(STARTUP) << config_.exit_filename << " starting at " << dt.to_string();
+  if (argc > 1) {
+    string cmdline;
+    for (int i = 1; i < argc; i++) {
+      cmdline += argv[i];
+      cmdline += " ";
+    }
+    LOG(STARTUP) << "command line: " << cmdline;
+  }
+}
+
+// static
+void Logger::ExitLogger() {
+  auto dt = DateTime::now();
+  LOG(STARTUP) << config_.exit_filename << " exiting at " << dt.to_string();
 }
 
 // static
 void Logger::Init(int argc, char** argv) {
+  LoggerConfig config{};
+  config.log_startup = true;
+  Init(argc, argv, config);
+};
+
+// static
+void Logger::Init(int argc, char** argv, LoggerConfig& c) {
+  config_ = c;
+  config_.cmdline_verbosity = 0;
+  CommandLine cmdline(argc, argv, "");
+  cmdline.AddStandardArgs();
+  cmdline.set_no_args_allowed(true);
+  cmdline.set_unknown_args_allowed(true);
+  cmdline.Parse();
+
+  auto logdir = cmdline.logdir();
+
+  // Set --v from commandline
+  config_.cmdline_verbosity = cmdline.iarg("v");
+
   string filename(argv[0]);
   if (ends_with(filename, ".exe") || ends_with(filename, ".EXE")) {
     filename = filename.substr(0, filename.size() - 4);
   }
-  int last_slash = filename.rfind(File::pathSeparatorChar);
+  auto last_slash = filename.rfind(File::pathSeparatorChar);
   if (last_slash != string::npos) {
     filename = filename.substr(last_slash + 1);
   }
-  set_filename("I", StrCat(filename, ".log"));
-  time_t t = time(nullptr);
-  string l(asctime(localtime(&t)));
-  StringTrim(&l);
-  Logger() << filename << " version " << wwiv_version << beta_version
-           << " (" << wwiv_date << ")";
-   Logger() << filename << " starting at " << l;
+  config_.log_filename = FilePath(logdir, StrCat(filename, ".log"));
+  config_.exit_filename = filename;
 
-  exit_filename = filename;
+  // Setup the default appenders.
+  console_appender.reset(new ConsoleAppender{});
+  logfile_appender.reset(new LogFileAppender{config_.log_filename});
+
+  if (config_.register_console_destinations) {
+    config_.add_appender(LoggerLevel::error, console_appender);
+    config_.add_appender(LoggerLevel::fatal, console_appender);
+    config_.add_appender(LoggerLevel::warning, console_appender);
+    config_.add_appender(LoggerLevel::info, console_appender);
+    config_.add_appender(LoggerLevel::verbose, console_appender);
+  }
+  if (config_.register_file_destinations) {
+    config_.add_appender(LoggerLevel::error, logfile_appender);
+    config_.add_appender(LoggerLevel::fatal, logfile_appender);
+    config_.add_appender(LoggerLevel::warning, logfile_appender);
+    config_.add_appender(LoggerLevel::info, logfile_appender);
+    config_.add_appender(LoggerLevel::verbose, logfile_appender);
+    config_.add_appender(LoggerLevel::start, logfile_appender);
+  }
+  if (config_.log_startup) {
+    StartupLog(argc, argv);
+  }
 }
 
-// static
-string Logger::date_time() {
-  time_t t = time(NULL);
-  char s[255];
-  strftime(s, sizeof(s), "%Y%m%d:%H%M%S", localtime(&t));
-  return string(s);
+static std::string DefaultTimestamp() {
+  auto dt = DateTime::now();
+  auto nowc = std::chrono::system_clock::now();
+  auto duration = nowc.time_since_epoch();
+  auto millis = static_cast<int>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() % 1000);
+  auto milliss = StringPrintf("%03d ", millis);
+  return StrCat(dt.to_string(log_date_format), ",", milliss);
 }
 
+LoggerConfig::LoggerConfig() : timestamp_fn_(DefaultTimestamp) {}
+
+void LoggerConfig::add_appender(LoggerLevel level, std::shared_ptr<Appender> appender) {
+  log_to[level].emplace(appender);
 }
+
+void LoggerConfig::reset() { 
+  timestamp_fn_ = DefaultTimestamp;
 }
+
+} // namespace core
+} // namespace wwiv

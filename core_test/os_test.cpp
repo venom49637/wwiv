@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*               Copyright (C)2014-2015 WWIV Software Services            */
+/*                              WWIV Version 5.x                          */
+/*               Copyright (C)2014-2017, WWIV Software Services           */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,10 +23,12 @@
 #include <string>
 
 #include "core/os.h"
+#include "core/strings.h"
 
 using std::string;
 using namespace std::chrono;
 using namespace wwiv::os;
+using namespace wwiv::strings;
 
 
 TEST(OsTest, WaitFor_PredicateTrue) {
@@ -56,17 +58,25 @@ TEST(OsTest, SleepFor) {
 }
 
 TEST(OsTest, EnvironmentVariable_Exists) {
-  ASSERT_EQ(0, putenv("QWERTYUIOP=ASDF"));
+  char s[81];
+  strcpy(s, "QWERTYUIOP=ASDF2");
+  ASSERT_EQ(0, putenv(s));
 
-  EXPECT_EQ("ASDF", environment_variable("QWERTYUIOP"));
+  EXPECT_EQ("ASDF2", environment_variable("QWERTYUIOP"));
 }
 
 TEST(OsTest, EnvironmentVariable_DoesNotExist) {
-  EXPECT_EQ("", environment_variable("XXXQWERTYUIOP"));
+  string name = test_info_->name();
+  StringUpperCase(&name);
+  EXPECT_EQ("", environment_variable(name));
 }
 
 TEST(OsTest, SetEnvironmentVariable) {
-  ASSERT_EQ("ASDF", environment_variable("QWERTYUIOP"));
-  ASSERT_TRUE(set_environment_variable("QWERTYUIOP", "ASDF"));
-  ASSERT_EQ("ASDF", environment_variable("QWERTYUIOP"));
+  string name = test_info_->name();
+  StringUpperCase(&name);
+  // Clear the environment
+  std::cout << name;
+  ASSERT_EQ("", environment_variable(name));
+  ASSERT_TRUE(set_environment_variable(name, "ASDF"));
+  ASSERT_EQ("ASDF", environment_variable(name));
 }

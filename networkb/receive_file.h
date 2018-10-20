@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*               Copyright (C)2015, WWIV Software Services                */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2015-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,6 +18,7 @@
 #ifndef __INCLUDED_NETORKB_RECEIVE_FILE_H__
 #define __INCLUDED_NETORKB_RECEIVE_FILE_H__
 
+#include <cstdint>
 #include <ctime>
 #include <memory>
 #include <string>
@@ -29,14 +30,24 @@ namespace net {
 
 class  ReceiveFile {
  public:
- 	ReceiveFile(TransferFile* file, const std::string& filename, long expected_length, time_t timestamp)
-      : file_(file), filename_(filename), expected_length_(expected_length), timestamp_(timestamp) {}
+ 	ReceiveFile(TransferFile* file, const std::string& filename, 
+              long expected_length, time_t timestamp, uint32_t crc)
+      : file_(file), filename_(filename), expected_length_(expected_length), 
+        timestamp_(timestamp), length_(0), crc_(crc) {}
  	~ReceiveFile() {}
 
-  bool WriteChunk (const char* chunk, size_t size) { 
-    bool ok = file_->WriteChunk(chunk, size); 
+  bool WriteChunk(const char* chunk, size_t size) {
+    bool ok = file_->WriteChunk(chunk, size);
     if (ok) {
       length_ += size;
+    }
+    return ok;
+  }
+
+  bool WriteChunk(const std::string& chunk) {
+    bool ok = file_->WriteChunk(chunk.data(), chunk.size());
+    if (ok) {
+      length_ += chunk.size();
     }
     return ok;
   }
@@ -46,12 +57,14 @@ class  ReceiveFile {
   long length() const { return length_; }
   time_t timestamp() const { return timestamp_; }
   bool Close() { return file_->Close(); }
+  uint32_t crc() const { return crc_; }
 
   std::unique_ptr<TransferFile> file_;
   std::string filename_;
-  long expected_length_;
-  time_t timestamp_;
-  long length_;
+  long expected_length_ = 0;
+  time_t timestamp_ = 0;
+  long length_ = 0;
+  uint32_t crc_ = 0;
 };
 
 }  // namespace net

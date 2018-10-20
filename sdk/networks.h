@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*             Copyright (C)2014-2015 WWIV Software Services              */
+/*                          WWIV Version 5.x                              */
+/*             Copyright (C)2014-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -53,8 +53,20 @@ public:
   size_type network_number(const std::string& network_name) const;
   bool contains(const std::string& network_name) const;
 
+  bool insert(std::size_t n, net_networks_rec r);
+  bool erase(std::size_t n);
+  bool Load();
+  bool Save();
+
+
 private:
-  bool initialized_;
+  bool LoadFromJSON();
+  bool LoadFromDat();
+  bool SaveToJSON();
+  bool SaveToDat();
+
+  bool initialized_ = false;
+  std::string datadir_;
   std::vector<net_networks_rec> networks_;
 };
 

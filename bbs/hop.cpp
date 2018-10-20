@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,32 +17,35 @@
 /*                                                                        */
 /**************************************************************************/
 
+#include "bbs/bbsovl3.h"
+#include "bbs/com.h"
 #include "bbs/confutil.h"
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
 #include "bbs/input.h"
 #include "core/strings.h"
 
+using namespace wwiv::strings;
 
 void HopSub() {
-  char s1[81], s2[81];
-
   bool abort = false;
   int nc = 0;
-  while (uconfsub[nc].confnum != -1) {
+  while (a()->uconfsub[nc].confnum != -1) {
     nc++;
   }
 
   if (okansi()) {
-    bout << "\r\x1b[K";
+    bout.clear_whole_line();
   } else {
     bout.nl();
   }
   bout << "|#9Enter name or partial name of sub to hop to:\r\n:";
   if (okansi()) {
-    newline = false;
+    bout.newline = false;
   }
-  input(s1, 40, true);
-  if (!s1[0]) {
+  auto partial = ToStringUpperCase(input_text(40));
+  if (partial.empty()) {
     return;
   }
   if (!okansi()) {
@@ -50,35 +53,34 @@ void HopSub() {
   }
 
   int c = 0;
-  int oc = session()->GetCurrentConferenceMessageArea();
-  int os = usub[session()->GetCurrentMessageArea()].subnum;
+  int oc = a()->GetCurrentConferenceMessageArea();
+  int os = a()->current_user_sub().subnum;
 
   while ((c < nc) && !abort) {
-    if (okconf(session()->user())) {
-      setuconf(CONF_SUBS, c, -1);
+    if (okconf(a()->user())) {
+      setuconf(ConferenceType::CONF_SUBS, c, -1);
     }
-    int i = 0;
-    while ((i < session()->num_subs) && (usub[i].subnum != -1) && !abort) {
-      strcpy(s2, subboards[usub[i].subnum].name);
-      for (int i2 = 0; (s2[i2] = upcase(s2[i2])) != 0; i2++)
-        ;
-      if (strstr(s2, s1) != nullptr) {
+    uint16_t i = 0;
+    while ((i < a()->subs().subs().size())
+            && (a()->usub[i].subnum != -1) && !abort) {
+      auto subname = ToStringUpperCase(a()->subs().sub(a()->usub[i].subnum).name);
+      if (subname.find(partial) != std::string::npos) {
         if (okansi()) {
-          bout << "\r\x1b[K";
+          bout.clear_whole_line();
         }
         if (!okansi()) {
           bout.nl();
         }
-        bout << "|#5Do you mean \"" << subboards[usub[i].subnum].name << "\" (Y/N/Q)? ";
+        bout << "|#5Do you mean \"" << a()->subs().sub(a()->usub[i].subnum).name << "\" (Y/N/Q)? ";
         char ch = onek_ncr("QYN\r");
         if (ch == 'Y') {
           abort = true;
-          session()->SetCurrentMessageArea(i);
+          a()->set_current_user_sub_num(i);
           break;
         } else if (ch == 'Q') {
           abort = true;
-          if (okconf(session()->user())) {
-            setuconf(CONF_SUBS, oc, os);
+          if (okconf(a()->user())) {
+            setuconf(ConferenceType::CONF_SUBS, oc, os);
           }
           break;
         }
@@ -86,36 +88,35 @@ void HopSub() {
       ++i;
     }
     c++;
-    if (!okconf(session()->user())) {
+    if (!okconf(a()->user())) {
       break;
     }
   }
-  if (okconf(session()->user()) && !abort) {
-    setuconf(CONF_SUBS, oc, os);
+  if (okconf(a()->user()) && !abort) {
+    setuconf(ConferenceType::CONF_SUBS, oc, os);
   }
 }
 
 
 void HopDir() {
-  char s1[81], s2[81];
   bool abort = false;
 
   int nc = 0;
-  while (uconfdir[nc].confnum != -1) {
+  while (a()->uconfdir[nc].confnum != -1) {
     nc++;
   }
 
   if (okansi()) {
-    bout << "\r\x1b[K";
+    bout.clear_whole_line();
   } else {
     bout.nl();
   }
   bout << "|#9Enter name or partial name of dir to hop to:\r\n:";
   if (okansi()) {
-    newline = false;
+    bout.newline = false;
   }
-  input(s1, 20, true);
-  if (!s1[0]) {
+  auto partial = ToStringUpperCase(input_text(20));
+  if (partial.empty()) {
     return;
   }
   if (!okansi()) {
@@ -123,34 +124,34 @@ void HopDir() {
   }
 
   int c = 0;
-  int oc = session()->GetCurrentConferenceFileArea();
-  int os = udir[session()->GetCurrentFileArea()].subnum;
+  auto oc = a()->GetCurrentConferenceFileArea();
+  auto os = a()->current_user_dir().subnum;
 
   while (c < nc && !abort) {
-    if (okconf(session()->user())) {
-      setuconf(CONF_DIRS, c, -1);
+    if (okconf(a()->user())) {
+      setuconf(ConferenceType::CONF_DIRS, c, -1);
     }
-    int i = 0;
-    while ((i < session()->num_dirs) && (udir[i].subnum != -1) && (!abort)) {
-      strcpy(s2, directories[udir[i].subnum].name);
-      for (int i2 = 0; (s2[i2] = upcase(s2[i2])) != 0; i2++)
-        ;
-      if (strstr(s2, s1) != nullptr) {
+    uint16_t i = 0;
+    while ((i < a()->directories.size()) && (a()->udir[i].subnum != -1) && (!abort)) {
+      auto subname = ToStringUpperCase(a()->directories[a()->udir[i].subnum].name);
+      if (subname.find(partial) != std::string::npos) {
         if (okansi()) {
-          bout << "\r\x1b[K";
+          bout.clear_whole_line();
         } else {
           bout.nl();
         }
-        bout << "|#5Do you mean \"" << directories[udir[i].subnum].name << "\" (Y/N/Q)? ";
+        bout << "|#5Do you mean \""
+             << a()->directories[a()->udir[i].subnum].name
+             << "\" (Y/N/Q)? ";
         char ch = onek_ncr("QYN\r");
         if (ch == 'Y') {
           abort = true;
-          session()->SetCurrentFileArea(i);
+          a()->set_current_user_dir_num(i);
           break;
         } else if (ch == 'Q') {
           abort = true;
-          if (okconf(session()->user())) {
-            setuconf(CONF_DIRS, oc, os);
+          if (okconf(a()->user())) {
+            setuconf(ConferenceType::CONF_DIRS, oc, os);
           }
           break;
         }
@@ -158,12 +159,12 @@ void HopDir() {
       ++i;
     }
     c++;
-    if (!okconf(session()->user())) {
+    if (!okconf(a()->user())) {
       break;
     }
   }
-  if (okconf(session()->user()) && !abort) {
-    setuconf(CONF_DIRS, oc, os);
+  if (okconf(a()->user()) && !abort) {
+    setuconf(ConferenceType::CONF_DIRS, oc, os);
   }
 }
 

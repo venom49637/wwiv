@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2008-2015, WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2008-2017, WWIV Software Services                */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -31,38 +31,46 @@ using std::vector;
 
 using namespace wwiv::strings;
 
-
 TEST(StringsTest, StripColors) {
-    EXPECT_EQ( string(""), stripcolors(string("")) );
-    EXPECT_EQ( string("|"), stripcolors(string("|")) );
-    EXPECT_EQ( string("|0"), stripcolors(string("|0")) );
-    EXPECT_EQ( string("12345"), stripcolors(string("12345")) );
-    EXPECT_EQ( string("abc"), stripcolors(string("abc")) );
-    EXPECT_EQ( string("1 abc"), stripcolors(string("\x031 abc")) );
-    EXPECT_EQ( string("\x03 abc"), stripcolors(string("\x03 abc")) );
-    EXPECT_EQ( string("abc"), stripcolors(string("|15abc")) );
+  EXPECT_EQ(string(""), stripcolors(string("")));
+  EXPECT_EQ(string("|"), stripcolors(string("|")));
+  EXPECT_EQ(string("|0"), stripcolors(string("|0")));
+  EXPECT_EQ(string("12345"), stripcolors(string("12345")));
+  EXPECT_EQ(string("abc"), stripcolors(string("abc")));
+  EXPECT_EQ(string("1 abc"), stripcolors(string("\x031 abc")));
+  EXPECT_EQ(string("\x03 abc"), stripcolors(string("\x03 abc")));
+  EXPECT_EQ(string("abc"), stripcolors(string("|15abc")));
+}
+
+TEST(StringsTest, StripColors_AnsiSeq) {
+  EXPECT_EQ(string(""), stripcolors(string("\x1b[0m")));
+  EXPECT_EQ(string(""), stripcolors(string("\x1b[0;33;46;1m")));
+  EXPECT_EQ(string("|"), stripcolors(string("|\x1b[0;33;46;1m")));
+  EXPECT_EQ(string("abc"), stripcolors(string("|15\x1b[0;33;46;1mabc")));
+  EXPECT_EQ(string("abc"),
+            stripcolors(string("\x1b[0m|15\x1b[0;33;46;1ma\x1b[0mb\x1b[0mc\x1b[0m")));
 }
 
 TEST(StringsTest, StringColors_CharStarVersion) {
-    EXPECT_STREQ( "", stripcolors("") );
-    EXPECT_STREQ( "|", stripcolors("|") );
-    EXPECT_STREQ( "|0", stripcolors("|0") );
-    EXPECT_STREQ( "12345", stripcolors( "12345") );
+  EXPECT_STREQ("", stripcolors(""));
+  EXPECT_STREQ("|", stripcolors("|"));
+  EXPECT_STREQ("|0", stripcolors("|0"));
+  EXPECT_STREQ("12345", stripcolors("12345"));
 }
 
 TEST(StringsTest, Properize) {
-    EXPECT_EQ( string("Rushfan"), properize( string("rushfan") ) );
-    EXPECT_EQ( string("Rushfan"), properize( string("rUSHFAN") ) );
-    EXPECT_EQ( string(""), properize( string("") ) );
-    EXPECT_EQ( string(" "), properize( string(" ") ) );
-    EXPECT_EQ( string("-"), properize( string("-") ) );
-    EXPECT_EQ( string("."), properize( string(".") ) );
-    EXPECT_EQ( string("R"), properize( string("R") ) );
-    EXPECT_EQ( string("R"), properize( string("r") ) );
-    EXPECT_EQ( string("Ru"), properize( string("RU") ) );
-    EXPECT_EQ( string("R.U"), properize( string("r.u") ) );
-    EXPECT_EQ( string("R U"), properize( string("r u") ) );
-    EXPECT_EQ( string("Rushfan"), properize( string("Rushfan") ) );
+  EXPECT_EQ(string("Rushfan"), properize(string("rushfan")));
+  EXPECT_EQ(string("Rushfan"), properize(string("rUSHFAN")));
+  EXPECT_EQ(string(""), properize(string("")));
+  EXPECT_EQ(string(" "), properize(string(" ")));
+  EXPECT_EQ(string("-"), properize(string("-")));
+  EXPECT_EQ(string("."), properize(string(".")));
+  EXPECT_EQ(string("R"), properize(string("R")));
+  EXPECT_EQ(string("R"), properize(string("r")));
+  EXPECT_EQ(string("Ru"), properize(string("RU")));
+  EXPECT_EQ(string("R.U"), properize(string("r.u")));
+  EXPECT_EQ(string("R U"), properize(string("r u")));
+  EXPECT_EQ(string("Rushfan"), properize(string("Rushfan")));
 }
 
 TEST(StringsTest, StringPrintf_Smoke) {
@@ -108,7 +116,7 @@ TEST(StringsTest, StringReplace_NotFound) {
 
 TEST(StringsTest, SplitString_Basic) {
   const string s = "Hello World";
-  vector<string> expected = { "Hello", "World" };
+  vector<string> expected = {"Hello", "World"};
   vector<string> actual;
   SplitString(s, " ", &actual);
   EXPECT_EQ(expected, actual);
@@ -116,22 +124,30 @@ TEST(StringsTest, SplitString_Basic) {
 
 TEST(StringsTest, SplitString_BasicReturned) {
   const string s = "Hello World";
-  vector<string> expected = { "Hello", "World" };
+  vector<string> expected = {"Hello", "World"};
   vector<string> actual = SplitString(s, " ");
   EXPECT_EQ(expected, actual);
 }
 
 TEST(StringsTest, SplitString_ExtraSingleDelim) {
   const string s = "Hello   World";
-  vector<string> expected = { "Hello", "World" };
+  vector<string> expected = {"Hello", "World"};
   vector<string> actual;
   SplitString(s, " ", &actual);
   EXPECT_EQ(expected, actual);
 }
 
+TEST(StringsTest, SplitString_ExtraSingleDelim_NoSkipEmpty) {
+  const string s = "Hello   World";
+  vector<string> expected = {"Hello", "", "", "World"};
+  vector<string> actual;
+  SplitString(s, " ", false, &actual);
+  EXPECT_EQ(expected, actual);
+}
+
 TEST(StringsTest, SplitString_TwoDelims) {
   const string s = "Hello\tWorld Everyone";
-  vector<string> expected = { "Hello", "World", "Everyone" };
+  vector<string> expected = {"Hello", "World", "Everyone"};
   vector<string> actual;
   SplitString(s, " \t", &actual);
   EXPECT_EQ(expected, actual);
@@ -139,85 +155,103 @@ TEST(StringsTest, SplitString_TwoDelims) {
 
 TEST(StringsTest, SplitString_TwoDelimsBackToBack) {
   const string s = "Hello\t\tWorld  \t\t  Everyone";
-  vector<string> expected = { "Hello", "World", "Everyone" };
+  vector<string> expected = {"Hello", "World", "Everyone"};
   vector<string> actual;
   SplitString(s, " \t", &actual);
   EXPECT_EQ(expected, actual);
 }
 
-TEST(StringsTest, StringToShort) {
-  EXPECT_EQ(1234, StringToShort("1234"));
-  EXPECT_EQ(0, StringToShort("0"));
-  EXPECT_EQ(-1234, StringToShort("-1234"));
+TEST(StringsTest, String_int16_t) {
+  EXPECT_EQ(1234, to_number<int16_t>("1234"));
+  EXPECT_EQ(0, to_number<int16_t>("0"));
+  EXPECT_EQ(-1234, to_number<int16_t>("-1234"));
 
-  EXPECT_EQ(std::numeric_limits<int16_t>::max(), StringToShort("999999"));
-  EXPECT_EQ(std::numeric_limits<int16_t>::min(), StringToShort("-999999"));
+  EXPECT_EQ(std::numeric_limits<int16_t>::max(), to_number<int16_t>("999999"));
+  EXPECT_EQ(std::numeric_limits<int16_t>::min(), to_number<int16_t>("-999999"));
 
-  EXPECT_EQ(0, StringToShort(""));
-  EXPECT_EQ(0, StringToShort("ASDF"));
+  EXPECT_EQ(0, to_number<int16_t>(""));
+  EXPECT_EQ(0, to_number<int16_t>("ASDF"));
 }
 
-TEST(StringsTest, StringToUnsignedShort) {
-  EXPECT_EQ(1234, StringToUnsignedShort("1234"));
-  EXPECT_EQ(0, StringToUnsignedShort("0"));
+TEST(StringsTest, String_uint16_t) {
+  EXPECT_EQ(1234, to_number<uint16_t>("1234"));
+  EXPECT_EQ(0, to_number<uint16_t>("0"));
 
-  EXPECT_EQ(std::numeric_limits<uint16_t>::max(), StringToUnsignedShort("999999"));
-  EXPECT_EQ(std::numeric_limits<uint16_t>::min(), StringToUnsignedShort("-999999"));
+  EXPECT_EQ(std::numeric_limits<uint16_t>::max(), to_number<uint16_t>("999999"));
 
-  EXPECT_EQ(0, StringToUnsignedShort(""));
-  EXPECT_EQ(0, StringToUnsignedShort("ASDF"));
+  EXPECT_EQ(0, to_number<uint16_t>(""));
+  EXPECT_EQ(0, to_number<uint16_t>("ASDF"));
 }
 
-TEST(StringsTest, StringToChar) {
-  EXPECT_EQ(std::numeric_limits<int8_t>::max(), StringToChar("1234"));
-  EXPECT_EQ(0, StringToChar("0"));
-  EXPECT_EQ(std::numeric_limits<int8_t>::min(), StringToChar("-1234"));
+TEST(StringsTest, String_unsigned_int) {
+  EXPECT_EQ(1234u, to_number<unsigned int>("1234"));
+  EXPECT_EQ(static_cast<unsigned int>(0), to_number<unsigned int>("0"));
 
-  EXPECT_EQ(std::numeric_limits<int8_t>::max(), StringToChar("999999"));
-  EXPECT_EQ(std::numeric_limits<int8_t>::min(), StringToChar("-999999"));
+  EXPECT_EQ(999999u, to_number<unsigned int>("999999"));
 
-  EXPECT_EQ(0, StringToChar(""));
-  EXPECT_EQ(0, StringToChar("ASDF"));
+  EXPECT_EQ(0u, to_number<unsigned int>(""));
+  EXPECT_EQ(0u, to_number<unsigned int>("ASDF"));
 }
 
-TEST(StringsTest, StringToUnsignedChar) {
-  EXPECT_EQ(12, StringToUnsignedChar("12"));
-  EXPECT_EQ(255, StringToUnsignedChar("255"));
-  EXPECT_EQ(0, StringToUnsignedChar("0"));
-  EXPECT_EQ(0, StringToUnsignedChar("-123"));
+TEST(StringsTest, String_int) {
+  EXPECT_EQ(1234, to_number<int>("1234"));
+  EXPECT_EQ(0, to_number<int>("0"));
 
-  EXPECT_EQ(std::numeric_limits<uint8_t>::max(), StringToUnsignedChar("999999"));
-  EXPECT_EQ(std::numeric_limits<uint8_t>::min(), StringToUnsignedChar("-999999"));
+  EXPECT_EQ(999999, to_number<int>("999999"));
+  EXPECT_EQ(-999999, to_number<int>("-999999"));
 
-  EXPECT_EQ(0, StringToUnsignedChar(""));
-  EXPECT_EQ(0, StringToUnsignedChar("ASDF"));
+  EXPECT_EQ(0, to_number<int>(""));
+  EXPECT_EQ(0, to_number<int>("ASDF"));
 }
 
-TEST(StringsTest, RemoveWhitespace_NoSpace) {
+TEST(StringsTest, String_int8_t) {
+  EXPECT_EQ(std::numeric_limits<int8_t>::max(), to_number<int8_t>("1234"));
+  EXPECT_EQ(0, to_number<int8_t>("0"));
+  EXPECT_EQ(std::numeric_limits<int8_t>::min(), to_number<int8_t>("-1234"));
+
+  EXPECT_EQ(std::numeric_limits<int8_t>::max(), to_number<int8_t>("999999"));
+  EXPECT_EQ(std::numeric_limits<int8_t>::min(), to_number<int8_t>("-999999"));
+
+  EXPECT_EQ(0, to_number<int8_t>(""));
+  EXPECT_EQ(0, to_number<int8_t>("ASDF"));
+}
+
+TEST(StringsTest, String_uint8_t) {
+  EXPECT_EQ(12, to_number<uint8_t>("12"));
+  EXPECT_EQ(255, to_number<uint8_t>("255"));
+  EXPECT_EQ(0, to_number<uint8_t>("0"));
+
+  EXPECT_EQ(std::numeric_limits<uint8_t>::max(), to_number<uint8_t>("999999"));
+
+  EXPECT_EQ(0, to_number<uint8_t>(""));
+  EXPECT_EQ(0, to_number<uint8_t>("ASDF"));
+}
+
+TEST(StringsTest, StringRemoveWhitespace_NoSpace) {
   string s("HelloWorld");
   string expected(s);
-  RemoveWhitespace(&s);
+  StringRemoveWhitespace(&s);
   EXPECT_EQ(expected, s);
 }
 
-TEST(StringsTest, RemoveWhitespace_InnerSpace) {
+TEST(StringsTest, StringRemoveWhitespace_InnerSpace) {
   string expected("HelloWorld");
   string s("Hello World");
-  RemoveWhitespace(&s);
+  StringRemoveWhitespace(&s);
   EXPECT_EQ(expected, s);
 }
 
-TEST(StringsTest, RemoveWhitespace_Trailing) {
+TEST(StringsTest, StringRemoveWhitespace_Trailing) {
   string expected("HelloWorld");
   string s("Hello World  ");
-  RemoveWhitespace(&s);
+  StringRemoveWhitespace(&s);
   EXPECT_EQ(expected, s);
 }
 
-TEST(StringsTest, RemoveWhitespace_Leading) {
+TEST(StringsTest, StringRemoveWhitespace_Leading) {
   string expected("HelloWorld");
   string s("  Hello World");
-  RemoveWhitespace(&s);
+  StringRemoveWhitespace(&s);
   EXPECT_EQ(expected, s);
 }
 
@@ -325,18 +359,76 @@ TEST(StringsTest, StringLowerCase) {
   EXPECT_EQ("ab", a);
 }
 
-TEST(StringsTest, CharStr) {
-  EXPECT_STREQ("a", charstr(1, 'a'));
-  EXPECT_STREQ("bbbbb", charstr(5, 'b'));
-}
-
-TEST(StringsTest, StringRemoveWhitespace) {
+TEST(StringsTest, StringRemoveWhitespace_charstar) {
   char s[81];
   strcpy(s, " h e l l o ");
   EXPECT_STREQ("hello", StringRemoveWhitespace(s));
   EXPECT_STREQ("hello", s);
 }
 
-TEST(StringsTest, StringRemoveChar) {
-  EXPECT_STREQ("he", StringRemoveChar("hello world", 'l'));
+TEST(StringsTest, StringRemoveWhitespace_str) {
+  string s = " h e l l o ";
+  StringRemoveWhitespace(&s);
+  EXPECT_STREQ("hello", s.c_str());
+}
+
+TEST(StringsTest, StringRemoveChar) { EXPECT_STREQ("he", StringRemoveChar("hello world", 'l')); }
+
+TEST(StringsTest, IEQuals_charstar) {
+  EXPECT_TRUE(iequals("foo", "foo"));
+  EXPECT_FALSE(iequals("foo", "fo"));
+  EXPECT_FALSE(iequals("fo", "foo"));
+  EXPECT_FALSE(iequals("", "foo"));
+  EXPECT_FALSE(iequals("foo", ""));
+}
+
+TEST(StringsTest, IEQuals) {
+  EXPECT_TRUE(iequals(string("foo"), string("foo")));
+  EXPECT_FALSE(iequals(string("foo"), string("fo")));
+  EXPECT_FALSE(iequals(string("fo"), string("foo")));
+  EXPECT_FALSE(iequals(string(""), string("foo")));
+  EXPECT_FALSE(iequals(string("foo"), string("")));
+}
+
+TEST(StringsTest, SizeWithoutColors) {
+  EXPECT_EQ(1u, size_without_colors("a"));
+  EXPECT_EQ(1u, size_without_colors("|#1a"));
+  EXPECT_EQ(1u, size_without_colors("|09a"));
+  EXPECT_EQ(1u, size_without_colors("|17|10a"));
+}
+
+TEST(StringsTest, SizeWithoutColors_AnsiStr) {
+  EXPECT_EQ(0u, size_without_colors("\x1b[0m"));
+  EXPECT_EQ(0u, size_without_colors("\x1b[0;33;46;1m"));
+  EXPECT_EQ(1u, size_without_colors("|\x1b[0;33;46;1m"));
+  EXPECT_EQ(3u, size_without_colors("|15\x1b[0;33;46;1mabc"));
+  EXPECT_EQ(3u, size_without_colors("\x1b[0m|15\x1b[0;33;46;1ma\x1b[0mb\x1b[0mc\x1b[0m"));
+}
+
+TEST(StringsTest, TrimToSizeIgnoreColors) {
+  EXPECT_EQ("a", trim_to_size_ignore_colors("a", 1));
+  EXPECT_EQ("|#5a", trim_to_size_ignore_colors("|#5a", 1));
+  EXPECT_EQ("|09|16a", trim_to_size_ignore_colors("|09|16a", 1));
+  EXPECT_EQ("|09|16a|09", trim_to_size_ignore_colors("|09|16a|09", 1));
+  EXPECT_EQ("|09|16a", trim_to_size_ignore_colors("|09|16aa|09", 1));
+}
+
+TEST(StringsTest, PadTo) { 
+  auto result = pad_to("a", 2);
+  EXPECT_EQ(result, "a ");
+}
+
+TEST(StringsTest, PadToPad) {
+  auto result = pad_to("a", 'x', 2);
+  EXPECT_EQ(result, "ax");
+}
+
+TEST(StringsTest, LPadTo) {
+  auto result = lpad_to("a", 2);
+  EXPECT_EQ(result, " a");
+}
+
+TEST(StringsTest, LPadToPad) {
+  auto result = lpad_to("a", 'x', 2);
+  EXPECT_EQ(result, "xa");
 }

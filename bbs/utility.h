@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*              Copyright (C)2014-2015 WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*              Copyright (C)2014-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -26,7 +26,7 @@
 #include "sdk/net.h"
 #include "sdk/vardec.h"
 
-void remove_from_temp(const char *pszFileName, const char *pszDirectoryName, bool bPrintStatus);
+void remove_from_temp(const std::string& file_name, const std::string& directory_name, bool bPrintStatus);
 bool sysop1();
 void ToggleScrollLockKey();
 bool okansi();
@@ -34,20 +34,16 @@ void reset_disable_conf();
 void frequent_init();
 double ratio();
 double post_ratio();
-double nsl();
-void Wait(double d);
-long freek1(const char *pszPathName);
-void send_net(net_header_rec * nh, unsigned short int *list, const char *text, const char *byname);
+long nsl();
+void send_net(net_header_rec* nh, std::vector<uint16_t> list, const std::string& text, const std::string& byname);
 void giveup_timeslice();
-char *stripfn(const char *pszFileName);
-void stripfn_inplace(char *pszFileName);
-void preload_subs();
-char *get_wildlist(char *pszFileMask);
+std::string stripfn(const std::string& file_name);
+char* stripfn(const char* file_name);
+void stripfn_inplace(char *file_name);
+char *get_wildlist(char *file_mask);
 int side_menu(int *menu_pos, bool redraw, const std::vector<std::string>& menu_items, int xpos, int ypos, struct side_menu_colors * smc);
-slrec getslrec(int nSl);
-void WWIV_SetFileTime(const char* pszFileName, const time_t tTime);
 bool okfsed();
-std::string W_DateString(time_t tDateTime, const std::string& origMode , const std::string& timeDelim);
+int ansir_to_flags(uint8_t ansir);
 
 #endif  // __INCLUDED_UTILITY_H__
 

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -27,19 +27,29 @@
 
 #ifdef _WIN32
 #include <io.h>
+
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif  // WIN32_LEAN_AND_MEAN
+
 #include <Windows.h>
 #else
 #include <sys/stat.h>
 #endif
 
+#include "core/datetime.h"
 #include "core/file.h"
 #include "core/os.h"
 #include "core/strings.h"
 #include "core/wwivport.h"
 
 using std::string;
+using namespace wwiv::core;
 using namespace wwiv::strings;
+
+// C++ is still lame sometimes.
+std::string FileHelper::basedir_;
+
 
 FileHelper::FileHelper() {
   const ::testing::TestInfo* const test_info =
@@ -48,17 +58,18 @@ FileHelper::FileHelper() {
   tmp_ = FileHelper::CreateTempDir(dir);
 }
 
-const string FileHelper::DirName(const string& name) const {
+const string FileHelper::DirName(const string& oname) const {
+  string name = File::FixPathSeparators(oname);
   return StrCat(tmp_, File::pathSeparatorString, name, File::pathSeparatorString);
 }
 
-bool FileHelper::Mkdir(const string& name) const {
-    const string path = DirName(name); 
-    return File::mkdir(path);
+bool FileHelper::Mkdir(const string& oname) const {
+  return File::mkdir(DirName(File::FixPathSeparators(oname)));
 }
 
-static const string GetTestTempDir() {
-  string test_tempdir = wwiv::os::environment_variable("WWIV_TEST_TEMPDIR");
+// static
+string FileHelper::GetTestTempDir() {
+  string test_tempdir = basedir_;
   if (test_tempdir.empty()) {
 #ifdef _WIN32
     char temp_path[_MAX_PATH];
@@ -76,10 +87,10 @@ string FileHelper::CreateTempDir(const string base) {
     const string temp_path = GetTestTempDir();
     string template_ = StrCat(temp_path, "/fileXXXXXX");
 #ifdef _WIN32
-    time_t now = time(nullptr);
-    const string local_dir_template = StringPrintf("%s%s.%lx", temp_path.c_str(), base.c_str(), now);
+    const auto fn_template = StrCat(base, ".", time_t_now());
+    const auto local_dir_template = wwiv::core::FilePath(temp_path, fn_template);
     if (CreateDirectory(local_dir_template.c_str(), nullptr)) {
-      return string(local_dir_template);
+      return local_dir_template;
     }
 #else
     char local_dir_template[MAX_PATH];
@@ -89,14 +100,11 @@ string FileHelper::CreateTempDir(const string base) {
       return string(result);
     }
 #endif
-    return string("");
+    return "";
 }
 
 string FileHelper::CreateTempFilePath(const string& orig_name) {
-  string name(orig_name);
-#ifdef _WIN32
-  std::replace(std::begin(name), std::end(name), '/', File::pathSeparatorChar);
-#endif  // _WIN32
+  string name(File::FixPathSeparators(orig_name));
   return StrCat(TempDir(), File::pathSeparatorString, name);
 }
 

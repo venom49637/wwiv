@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,487 +19,622 @@
 #include "bbs/wfc.h"
 
 #include <cctype>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "bbs/wwiv.h"
+// If this is gone, we get errors on CY and other things in wtypes.h
+#include "core/stl.h"
+
+#include "bbs/bbs.h"
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsutl.h"
+#include "bbs/chnedit.h"
+#include "bbs/com.h"
+#include "bbs/confutil.h"
+#include "bbs/connect1.h"
 #include "bbs/datetime.h"
+#include "bbs/diredit.h"
+#include "bbs/events.h"
+#include "bbs/exec.h"
+#include "bbs/external_edit.h"
+#include "bbs/gfileedit.h"
+#include "bbs/inetmsg.h"
+#include "bbs/input.h"
 #include "bbs/instmsg.h"
-#include "bbs/local_io_curses.h"
 #include "bbs/multinst.h"
 #include "bbs/netsup.h"
+#include "bbs/pause.h"
 #include "bbs/printfile.h"
-#include "bbs/uedit.h"
+#include "bbs/readmail.h"
+#include "bbs/ssh.h"
+#include "bbs/subedit.h"
+#include "bbs/sysopf.h"
+#include "bbs/sysoplog.h"
+#include "bbs/utility.h"
+#include "local_io/local_io.h"
+
+#include "bbs/application.h"
 #include "bbs/voteedit.h"
-#include "bbs/wconstants.h"
-#include "bbs/wstatus.h"
+#include "bbs/workspace.h"
+#include "bbs/wqscn.h"
+#include "core/file.h"
+#include "core/log.h"
 #include "core/os.h"
 #include "core/strings.h"
-#include "core/wwivport.h"
-#include "core/inifile.h"
-#include "initlib/curses_io.h"
+#include "core/version.h"
+#include "local_io/wconstants.h"
+#include "sdk/filenames.h"
+#include "sdk/status.h"
 
 using std::string;
 using std::unique_ptr;
 using std::vector;
-using wwiv::core::IniFile;
 using wwiv::core::FilePath;
+using wwiv::core::IniFile;
 using wwiv::os::random_number;
+using namespace std::chrono;
+using namespace std::chrono_literals;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
+// Local Functions
+static std::unique_ptr<char[]> screen_buffer;
+static int inst_num;
+static constexpr int sysop_usernum = 1;
+
+void wfc_cls(Application* a) {
+  if (a->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
+    bout.ResetColors();
+    a->Cls();
+    a->localIO()->SetCursor(LocalIO::cursorNormal);
+  }
+  // Every time we clear the WFC, reset the lines listed.
+  bout.clear_lines_listed();
+}
 
 namespace wwiv {
-namespace wfc {
+namespace bbs {
 
-namespace {
-static CursesWindow* CreateBoxedWindow(const std::string& title, int nlines, int ncols, int y, int x) {
-  unique_ptr<CursesWindow> window(new CursesWindow(out->window(), out->color_scheme(), nlines, ncols, y, x));
-  window->SetColor(SchemeId::WINDOW_BOX);
-  window->Box(0, 0);
-  window->SetTitle(title);
-  window->SetColor(SchemeId::WINDOW_TEXT);
-  return window.release();
-}
-}
+static void wfc_update() {
+  // Every time we update the WFC, reset the lines listed.
+  bout.clear_lines_listed();
 
-auto noop = [](){};
-
-static void wfc_command(int instance_location_id, std::function<void()> f, 
-    std::function<void()> f2 = noop, std::function<void()> f3 = noop, std::function<void()> f4 = noop) {
-  session()->reset_local_io(new CursesLocalIO(out->window()->GetMaxY()));
-
-  if (!AllowLocalSysop()) {
-    // TODO(rushfan): Show messagebox error?
+  if (!a()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
     return;
   }
-  wfc_cls();
-  write_inst(instance_location_id, 0, INST_FLAGS_NONE);
-  f();
-  f2();
-  f3();
-  f4();
-  write_inst(INST_LOC_WFC, 0, INST_FLAGS_NONE);
-}
 
-auto send_email_f = []() {
-  session()->usernum = 1;
-  bout << "|#1Send Email:";
-  send_email();
-  session()->WriteCurrentUser(1);
-};
-
-auto view_sysop_log_f = []() {
-  unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  const string sysop_log_file = GetSysopLogFileName(date());
-  print_local_file(sysop_log_file);
-};
-
-auto view_yesterday_sysop_log_f = []() {
-  unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  print_local_file(pStatus->GetLogFileName(1));
-};
-
-auto read_mail_f = []() {
-  session()->usernum = 1;
-  readmail(0);
-  session()->WriteCurrentUser(1);
-};
-
-auto getkey_f = []() { getkey(); };
-
-ControlCenter::ControlCenter() {
-  const string title = StringPrintf("WWIV %s%s Server.", wwiv_version, beta_version);
-  CursesIO::Init(title);
-  // take ownership of out.
-  out_scope_.reset(out);
-  application()->SetWfcStatus(0);
-}
-
-ControlCenter::~ControlCenter() {}
-
-static void DrawCommands(CursesWindow* commands) {
-  commands->SetColor(SchemeId::WINDOW_TEXT);
-  commands->PutsXY(1, 1, "[B]oardEdit [C]hainEdit");
-  commands->PutsXY(1, 2, "[D]irEdit [E]mail [G]-FileEdit");
-  commands->PutsXY(1, 3, "[I]nit Voting Data  [J] ConfEdit");
-  commands->PutsXY(1, 4, "Sysop[L]og  Read [M]ail  [N]etLog");
-  commands->PutsXY(1, 5, "[P]ending Net Data [/] Net Callout");
-  commands->PutsXY(1, 6, "[R]ead all email [S]ystem Status");
-  commands->PutsXY(1, 7, "[U]serEdit [Y]-Log [Z]-Log");
-}
-
-static void DrawStatus(CursesWindow* statusWindow) {
-  statusWindow->SetColor(SchemeId::WINDOW_TEXT);
-  statusWindow->PutsXY(2, 1, "Today:");
-  statusWindow->PutsXY(2, 2, "Calls: XXXXX Minutes: XXXXX");
-  statusWindow->PutsXY(2, 3, "M: XXX L: XXX E: XXX F: XXX FW: XXX");
-  statusWindow->PutsXY(2, 4, "Totals:");
-  statusWindow->PutsXY(2, 5, "Users: XXXXX Calls: XXXXX");
-  statusWindow->PutsXY(2, 6, "Last User:");
-  statusWindow->PutsXY(2, 7, "XXXXXXXXXXXXXXXXXXXXXXXXXX");
-}
-
-static string GetLastUserName(int inst_num) {
-  instancerec ir;
-  WUser u;
+  instancerec ir = {};
+  User u = {};
 
   get_inst_info(inst_num, &ir);
-  application()->users()->ReadUserNoCache(&u, ir.user);
+  a()->users()->readuser_nocache(&u, ir.user);
+  a()->localIO()->PutsXYA(57, 18, 15, pad_to(std::to_string(inst_num), 3));
   if (ir.flags & INST_FLAGS_ONLINE) {
-    return string(u.GetUserNameAndNumber(ir.user));
+    const string unn = a()->names()->UserName(ir.user);
+    a()->localIO()->PutsXYA(42, 19, 14, pad_to(unn, 25));
   } else {
-    return "Nobody";
+    a()->localIO()->PutsXYA(42, 19, 14, pad_to("Nobody", 25));
   }
 
-}
-
-static void UpdateStatus(CursesWindow* statusWindow) {
-  statusWindow->SetColor(SchemeId::WINDOW_DATA);
-  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-
-  statusWindow->PrintfXY(9, 2, "%-5d", pStatus->GetNumCallsToday());
-  statusWindow->PrintfXY(24, 2, "%-5d", pStatus->GetMinutesActiveToday());
-
-  statusWindow->PrintfXY(5, 3, "%-3u", pStatus->GetNumMessagesPostedToday());
-  statusWindow->PrintfXY(12, 3, "%-3u", pStatus->GetNumLocalPosts());
-  statusWindow->PrintfXY(19, 3, "%-3u", pStatus->GetNumEmailSentToday());
-  statusWindow->PrintfXY(26, 3, "%-3u", pStatus->GetNumFeedbackSentToday());
-
-  fwaiting = session()->user()->GetNumMailWaiting();
-  statusWindow->PrintfXY(34, 3, "%-3d", fwaiting);
-
-  statusWindow->PrintfXY(9, 5, "%-5d", pStatus->GetNumUsers());
-  statusWindow->PrintfXY(22, 5, "%-6lu", pStatus->GetCallerNumber());
-
-  // TODO(rushfan): Need to know the last used node number
-  // then call GetLastUserName.
-  //  statusWindow->PutsXY(2, 7, "XXXXXXXXXXXXXXXXXXXXXXXXXX");
-}
-
-static void CleanNetIfNeeded() {
-  if (session()->GetMessageAreaCacheNumber() < session()->num_subs) {
-    if (!session()->m_SubDateCache[session()->GetMessageAreaCacheNumber()]) {
-      iscan1(session()->GetMessageAreaCacheNumber(), true);
-    }
-    session()->SetMessageAreaCacheNumber(session()->GetMessageAreaCacheNumber() + 1);
-  } else {
-    if (session()->GetFileAreaCacheNumber() < session()->num_dirs) {
-      if (!session()->m_DirectoryDateCache[session()->GetFileAreaCacheNumber()]) {
-        dliscan_hash(session()->GetFileAreaCacheNumber());
-      }
-      session()->SetFileAreaCacheNumber(session()->GetFileAreaCacheNumber() + 1);
-    } else {
-      static int mult_time = 0;
-      if (application()->IsCleanNetNeeded() || abs(timer1() - mult_time) > 1000L) {
-        cleanup_net();
-        mult_time = timer1();
-      }
-    }
-  }
-}
-
-
-static void RunEventsIfNeeded() {
-  unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  if (!IsEquals(date(), pStatus->GetLastDate())) {
-    if ((session()->GetBeginDayNodeNumber() == 0) 
-        || (application()->GetInstanceNumber() == session()->GetBeginDayNodeNumber())) {
-      cleanup_events();
-      beginday(true);
-    }
-  }
-
-  if (!do_event) {
-    check_event();
-  }
-
-  while (do_event) {
-    run_event(do_event - 1);
-    check_event();
-  }
-
-  session()->SetCurrentSpeed("KB");
-  static time_t last_time_c = 0;
-  time_t lCurrentTime = time(nullptr);
-  if ((((rand() % 8000) == 0) || (lCurrentTime - last_time_c > 1200)) && net_sysnum) {
-    lCurrentTime = last_time_c;
-    attempt_callout();
-  }
-}
-
-void ControlCenter::Initialize() {
-  // Initialization steps that have to happen before we
-  // have a functional WFC system. This also supposes that
-  // application()->InitializeBBS has been called.
-  out->Cls(ACS_CKBOARD);
-  const int logs_y_padding = 1;
-  const int logs_start = 11;
-  const int logs_length = out->window()->GetMaxY() - logs_start - logs_y_padding;
-  log_.reset(new WfcLog(logs_length - 2));
-  commands_.reset(CreateBoxedWindow("Commands", 9, 38, 1, 1));
-  status_.reset(CreateBoxedWindow("Status", 9, 39, 1, 40));
-  logs_.reset(CreateBoxedWindow("Logs", logs_length, 78, 11, 1));
-
-  DrawCommands(commands_.get());
-  DrawStatus(status_.get());
-  vector<HelpItem> help_items0 = { { "?", "All Commands" },};
-  vector<HelpItem> help_items1 = { {"Q", "Quit" } };
-  out->footer()->ShowHelpItems(0, help_items0);
-  out->footer()->ShowHelpItems(1, help_items1);
-
-  session()->ReadCurrentUser(1);
-  read_qscn(1, qsc, false);
-  session()->ResetEffectiveSl();
-  session()->usernum = 1;
-
-  fwaiting = session()->user()->GetNumMailWaiting();
-  application()->SetWfcStatus(1);
-}
-
-void ControlCenter::Run() {
-  Initialize();
-  bool need_refresh = false;
-  for (bool done = false; !done;) {
-    if (need_refresh) {
-      // refresh the window since we call endwin before invoking bbs code.
-      RefreshAll();
-      need_refresh = false;
-    }
-
-    wtimeout(commands_->window(), 500);
-    int key = commands_->GetChar();
-    if (key == ERR) {
-      // we have a timeout. process other events
-      need_refresh = false;
-      UpdateLog();
-      UpdateStatus(status_.get());
-      CleanNetIfNeeded();
-      RunEventsIfNeeded();
-      continue;
-    }
-    need_refresh = true;
-    application()->SetWfcStatus(2);
-    // Call endwin since we'll be out of curses IO
-    endwin();
-    switch (toupper(key)) {
-    case 'B': wfc_command(INST_LOC_BOARDEDIT, boardedit, cleanup_net); log_->Put("Ran BoardEdit"); break;
-    case 'C': wfc_command(INST_LOC_CHAINEDIT, chainedit); log_->Put("Ran ChainEdit"); break;
-    case 'D': wfc_command(INST_LOC_DIREDIT, dlboardedit); log_->Put("Ran DirEdit"); break;
-    case 'E': wfc_command(INST_LOC_EMAIL, send_email_f, cleanup_net); break;
-    case 'G': wfc_command(INST_LOC_GFILEEDIT, gfileedit); break;
-    case 'H': wfc_command(INST_LOC_EVENTEDIT, eventedit); break;
-    case 'I': wfc_command(INST_LOC_VOTEEDIT, ivotes); break;
-    case 'J': wfc_command(INST_LOC_CONFEDIT, edit_confs); break;
-    case 'L': wfc_command(INST_LOC_WFC, view_sysop_log_f); break;
-    case 'M': wfc_command(INST_LOC_EMAIL, read_mail_f, cleanup_net); break;
-    case 'N': wfc_command(INST_LOC_WFC, []() { print_local_file("net.log"); }); break;
-    case 'P': wfc_command(INST_LOC_WFC, print_pending_list); break;
-    case 'R': wfc_command(INST_LOC_MAILR, mailr); break;
-    case 'S': wfc_command(INST_LOC_WFC, prstatus, getkey_f); break;
-    case 'U': wfc_command(INST_LOC_UEDIT, []() { uedit(1, UEDIT_NONE); } ); break;
-    case 'Y': wfc_command(INST_LOC_WFC, view_yesterday_sysop_log_f); break;
-    case 'Z': wfc_command(INST_LOC_WFC, zlog, getkey_f); break;
-    case 'Q': done=true; break;
-    // ansicallout doesn't work due to arrow keys and other drawing problems with it under curses.
-    // case '/': wfc_command(INST_LOC_NET, []() { force_callout(0); }); log_->Put("Ran Network Callout"); break;
-    case ' ': log_->Put("Not Implemented Yet"); break; 
-    }
-    TouchAll();
-  }
-}
-
-void ControlCenter::TouchAll() {
-  out->window()->TouchWin();
-  commands_->TouchWin();
-  status_->TouchWin();
-  logs_->TouchWin();
-}
-
-void ControlCenter::RefreshAll() {
-  out->window()->Refresh();
-  commands_->Refresh();
-  status_->Refresh();
-  logs_->Refresh();
-  UpdateStatus(status_.get());
-}
-
-void ControlCenter::UpdateLog() {
-  if (!log_->dirty()) {
-    return;
-  }
-
-  vector<string> lines;
-  if (!log_->Get(lines)) {
-    return;
-  }
-
-  int start = 1;
-  const int width = logs_->GetMaxX() - 4;
-  for (const auto& line : lines) {
-    logs_->PutsXY(1, start, line);
-    logs_->PutsXY(1 + line.size(), start, string(width - line.size(), ' '));
-    start++;
-  }
-}
-
-}
-}
-
-// Legacy WFC
-
-#if !defined ( __unix__ )
-
-// Local Functions
-void DisplayWFCScreen(const char *pszBuffer);
-static char* pszScreenBuffer = nullptr;
-
-static int inst_num;
-
-void wfc_cls() {
-  if (application()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
-    bout.ResetColors();
-    session()->localIO()->LocalCls();
-    session()->wfc_status = 0;
-    session()->localIO()->SetCursor(LocalIO::cursorNormal);
-  }
-}
-
-void wfc_init() {
-  session()->localIO()->SetCursor(LocalIO::cursorNormal);              // add 4.31 Build3
-  if (application()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
-    session()->wfc_status = 0;
-    inst_num = 1;
-  }
-}
-
-void wfc_update() {
-  if (!application()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
-    return;
-  }
-
-  instancerec ir;
-  WUser u;
-
-  get_inst_info(inst_num, &ir);
-  application()->users()->ReadUserNoCache(&u, ir.user);
-  session()->localIO()->LocalXYAPrintf(57, 18, 15, "%-3d", inst_num);
-  if (ir.flags & INST_FLAGS_ONLINE) {
-    session()->localIO()->LocalXYAPrintf(42, 19, 14, "%-25.25s", u.GetUserNameAndNumber(ir.user));
-  } else {
-    session()->localIO()->LocalXYAPrintf(42, 19, 14, "%-25.25s", "Nobody");
-  }
-
-  string activity_string;
-  make_inst_str(inst_num, &activity_string, INST_FORMAT_WFC);
-  session()->localIO()->LocalXYAPrintf(42, 20, 14, "%-25.25s", activity_string.c_str());
+  string activity_string = make_inst_str(inst_num, INST_FORMAT_WFC);
+  a()->localIO()->PutsXYA(42, 20, 14, pad_to(activity_string, 25));
   if (num_instances() > 1) {
     do {
       ++inst_num;
       if (inst_num > num_instances()) {
         inst_num = 1;
       }
-    } while (inst_num == application()->GetInstanceNumber());
+    } while (inst_num == a()->instance_number());
   }
 }
 
-void wfc_screen() {
-  char szBuffer[ 255 ];
-  instancerec ir;
-  WUser u;
-  static double wfc_time = 0, poll_time = 0;
+void WFC::Clear() {
+  wfc_cls(a_);
+  status_ = 0;
+}
 
-  if (!application()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
+void WFC::DrawScreen() {
+  instancerec ir;
+  User u;
+  static steady_clock::time_point wfc_time;
+  static steady_clock::time_point poll_time;
+
+  if (!a()->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
     return;
   }
 
-  int nNumNewMessages = check_new_mail(session()->usernum);
-  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  if (session()->wfc_status == 0) {
-    session()->localIO()->SetCursor(LocalIO::cursorNone);
-    session()->localIO()->LocalCls();
-    if (pszScreenBuffer == nullptr) {
-      pszScreenBuffer = new char[4000];
-      File wfcFile(syscfg.datadir, WFC_DAT);
+  int nNumNewMessages = check_new_mail(sysop_usernum);
+  auto status = a()->status_manager()->GetStatus();
+  if (status_ == 0) {
+    a()->localIO()->SetCursor(LocalIO::cursorNone);
+    a()->Cls();
+    if (!screen_buffer) {
+      screen_buffer = std::make_unique<char[]>(80 * 25 * sizeof(uint16_t));
+      File wfcFile(FilePath(a()->config()->datadir(), WFC_DAT));
       if (!wfcFile.Open(File::modeBinary | File::modeReadOnly)) {
-        wfc_cls();
-        std::clog << wfcFile.full_pathname() << " NOT FOUND." << std::endl;
-        application()->AbortBBS();
+        Clear();
+        LOG(FATAL) << wfcFile.full_pathname() << " NOT FOUND.";
+        a()->AbortBBS();
       }
-      wfcFile.Read(pszScreenBuffer, 4000);
+      wfcFile.Read(screen_buffer.get(), 80 * 25 * sizeof(uint16_t));
     }
-    DisplayWFCScreen(pszScreenBuffer);
-    sprintf(szBuffer, "Activity and Statistics of %s Node %d", syscfg.systemname, application()->GetInstanceNumber());
-    session()->localIO()->LocalXYAPrintf(1 + ((76 - strlen(szBuffer)) / 2), 4, 15, szBuffer);
-    session()->localIO()->LocalXYAPrintf(8, 1, 14, fulldate());
-    std::string osVersion = wwiv::os::os_version_string();
-    session()->localIO()->LocalXYAPrintf(40, 1, 3, "OS: ");
-    session()->localIO()->LocalXYAPrintf(44, 1, 14, osVersion.c_str());
-    session()->localIO()->LocalXYAPrintf(21, 6, 14, "%d", pStatus->GetNumCallsToday());
-    session()->localIO()->LocalXYAPrintf(21, 7, 14, "%d", fwaiting);
+    a()->localIO()->WriteScreenBuffer(screen_buffer.get());
+    const auto title = StringPrintf("Activity and Statistics of %s Node %d",
+                                    a()->config()->system_name().c_str(), a()->instance_number());
+    a()->localIO()->PutsXYA(1 + ((76 - title.size()) / 2), 4, 15, title);
+    a()->localIO()->PutsXYA(8, 1, 14, fulldate());
+    a()->localIO()->PutsXYA(40, 1, 3, StrCat("OS: ", wwiv::os::os_version_string()));
+    a()->localIO()->PutsXYA(21, 6, 14, std::to_string(status->GetNumCallsToday()));
+    User sysop{};
+    int feedback_waiting = 0;
+    if (a()->users()->readuser_nocache(&sysop, sysop_usernum)) {
+      feedback_waiting = sysop.GetNumMailWaiting();
+    }
+    a()->localIO()->PutsXYA(21, 7, 14, std::to_string(feedback_waiting));
     if (nNumNewMessages) {
-      session()->localIO()->LocalXYAPrintf(29, 7 , 3, "New:");
-      session()->localIO()->LocalXYAPrintf(34, 7 , 12, "%d", nNumNewMessages);
+      a()->localIO()->PutsXYA(29, 7, 3, "New:");
+      a()->localIO()->PutsXYA(34, 7, 12, std::to_string(nNumNewMessages));
     }
-    session()->localIO()->LocalXYAPrintf(21, 8, 14, "%d", pStatus->GetNumUploadsToday());
-    session()->localIO()->LocalXYAPrintf(21, 9, 14, "%d", pStatus->GetNumMessagesPostedToday());
-    session()->localIO()->LocalXYAPrintf(21, 10, 14, "%d", pStatus->GetNumLocalPosts());
-    session()->localIO()->LocalXYAPrintf(21, 11, 14, "%d", pStatus->GetNumEmailSentToday());
-    session()->localIO()->LocalXYAPrintf(21, 12, 14, "%d", pStatus->GetNumFeedbackSentToday());
-    session()->localIO()->LocalXYAPrintf(21, 13, 14, "%d Mins (%.1f%%)", pStatus->GetMinutesActiveToday(),
-                                            100.0 * static_cast<float>(pStatus->GetMinutesActiveToday()) / 1440.0);
-    session()->localIO()->LocalXYAPrintf(58, 6, 14, "%s%s", wwiv_version, beta_version);
+    a()->localIO()->PutsXYA(21, 8, 14, std::to_string(status->GetNumUploadsToday()));
+    a()->localIO()->PutsXYA(21, 9, 14, std::to_string(status->GetNumMessagesPostedToday()));
+    a()->localIO()->PutsXYA(21, 10, 14, std::to_string(status->GetNumLocalPosts()));
+    a()->localIO()->PutsXYA(21, 11, 14, std::to_string(status->GetNumEmailSentToday()));
+    a()->localIO()->PutsXYA(21, 12, 14, std::to_string(status->GetNumFeedbackSentToday()));
+    a()->localIO()->PutsXYA(
+        21, 13, 14,
+        StringPrintf("%d Mins (%.1f%%)", status->GetMinutesActiveToday(),
+                     100.0 * static_cast<float>(status->GetMinutesActiveToday()) / 1440.0));
+    a()->localIO()->PutsXYA(58, 6, 14, StrCat(wwiv_version, beta_version));
 
-    session()->localIO()->LocalXYAPrintf(58, 7, 14, "%d", pStatus->GetNetworkVersion());
-    session()->localIO()->LocalXYAPrintf(58, 8, 14, "%d", pStatus->GetNumUsers());
-    session()->localIO()->LocalXYAPrintf(58, 9, 14, "%ld", pStatus->GetCallerNumber());
-    if (pStatus->GetDays()) {
-      session()->localIO()->LocalXYAPrintf(58, 10, 14, "%.2f", static_cast<float>(pStatus->GetCallerNumber()) /
-                                              static_cast<float>(pStatus->GetDays()));
+    a()->localIO()->PutsXYA(58, 7, 14, std::to_string(status->GetNetworkVersion()));
+    a()->localIO()->PutsXYA(58, 8, 14, std::to_string(status->GetNumUsers()));
+    a()->localIO()->PutsXYA(58, 9, 14, std::to_string(status->GetCallerNumber()));
+    if (status->GetDays()) {
+      a()->localIO()->PutsXYA(58, 10, 14,
+                              StringPrintf("%.2f", static_cast<float>(status->GetCallerNumber()) /
+                                                       static_cast<float>(status->GetDays())));
     } else {
-      session()->localIO()->LocalXYAPrintf(58, 10, 14, "N/A");
+      a()->localIO()->PutsXYA(58, 10, 14, "N/A");
     }
-    session()->localIO()->LocalXYAPrintf(58, 11, 14, sysop2() ? "Available    " : "Not Available");
-    session()->localIO()->LocalXYAPrintf(58, 12, 14, "Local %code", (syscfgovr.primaryport) ? 'M' : 'N');
-    session()->localIO()->LocalXYAPrintf(58, 13, 14, "Waiting For Command");
+    a()->localIO()->PutsXYA(58, 11, 14, sysop2() ? "Available    " : "Not Available");
 
-    get_inst_info(application()->GetInstanceNumber(), &ir);
-    if (ir.user < syscfg.maxusers && ir.user > 0) {
-      application()->users()->ReadUserNoCache(&u, ir.user);
-      session()->localIO()->LocalXYAPrintf(33, 16, 14, "%-20.20s", u.GetUserNameAndNumber(ir.user));
+    get_inst_info(a()->instance_number(), &ir);
+    if (ir.user < a()->config()->max_users() && ir.user > 0) {
+      const string unn = a()->names()->UserName(ir.user);
+      a()->localIO()->PutsXYA(33, 16, 14, pad_to(unn, 20));
     } else {
-      session()->localIO()->LocalXYAPrintf(33, 16, 14, "%-20.20s", "Nobody");
+      a()->localIO()->PutsXYA(33, 16, 14, pad_to("Nobody", 20));
     }
 
-    session()->wfc_status = 1;
+    status_ = 1;
     wfc_update();
-    poll_time = wfc_time = timer();
+    poll_time = wfc_time = steady_clock::now();
   } else {
-    if ((timer() - wfc_time < session()->screen_saver_time) ||
-        (session()->screen_saver_time == 0)) {
-      session()->localIO()->LocalXYAPrintf(28, 1, 14, times());
-      session()->localIO()->LocalXYAPrintf(58, 11, 14, sysop2() ? "Available    " : "Not Available");
-      if (timer() - poll_time > 10) {
+    auto screen_saver_time = seconds(a()->screen_saver_time);
+    if ((a()->screen_saver_time == 0) || (steady_clock::now() - wfc_time < screen_saver_time)) {
+      string t = times();
+      a()->localIO()->PutsXYA(28, 1, 14, t);
+      a()->localIO()->PutsXYA(58, 11, 14, sysop2() ? "Available    " : "Not Available");
+      if (steady_clock::now() - poll_time > seconds(10)) {
         wfc_update();
-        poll_time = timer();
+        poll_time = steady_clock::now();
       }
     } else {
-      if ((timer() - poll_time > 10) || session()->wfc_status == 1) {
-        session()->wfc_status = 2;
-        session()->localIO()->LocalCls();
-        session()->localIO()->LocalXYAPrintf(random_number(38),
-                                                random_number(24),
-                                                random_number(14) + 1,
-                                                "WWIV Screen Saver - Press Any Key For WWIV");
-        wfc_time = timer() - session()->screen_saver_time - 1;
-        poll_time = timer();
+      if ((steady_clock::now() - poll_time > seconds(10)) || status_ == 1) {
+        status_ = 2;
+        a_->Cls();
+        a()->localIO()->PutsXYA(random_number(38), random_number(24), random_number(14) + 1,
+                                "WWIV Screen Saver - Press Any Key For WWIV");
+        wfc_time = steady_clock::now() - seconds(a()->screen_saver_time) - seconds(1);
+        poll_time = steady_clock::now();
       }
     }
   }
 }
 
-void DisplayWFCScreen(const char *screenBuffer) {
-  session()->localIO()->LocalWriteScreenBuffer(screenBuffer);
+WFC::WFC(Application* a) : a_(a) {
+  a_->localIO()->SetCursor(LocalIO::cursorNormal);
+  if (a_->HasConfigFlag(OP_FLAGS_WFC_SCREEN)) {
+    status_ = 0;
+    inst_num = 1;
+  }
+  Clear();
 }
 
-#endif // __unix__
+WFC::~WFC() {}
+
+int WFC::doWFCEvents() {
+  unsigned char ch = 0;
+  int lokb = 0;
+  LocalIO* io = a_->localIO();
+
+  auto last_date_status = a()->status_manager()->GetStatus();
+  do {
+    write_inst(INST_LOC_WFC, 0, INST_FLAGS_NONE);
+    a_->set_net_num(0);
+    bool any = false;
+    a_->set_at_wfc(true);
+
+    // If the date has changed since we last checked, then then run the beginday event.
+    if (date() != last_date_status->GetLastDate()) {
+      if ((a_->GetBeginDayNodeNumber() == 0) ||
+          (a_->instance_number() == a_->GetBeginDayNodeNumber())) {
+        cleanup_events();
+        beginday(true);
+        Clear();
+      }
+    }
+
+    if (!a()->do_event_) {
+      check_event();
+    }
+
+    while (a()->do_event_) {
+      run_event(a()->do_event_ - 1);
+      // dunno if we really need this.
+      Clear();
+      check_event();
+      any = true;
+    }
+
+    lokb = 0;
+    a_->SetCurrentSpeed("KB");
+    auto current_time = steady_clock::now();
+    auto node_supports_callout = a_->HasConfigFlag(OP_FLAGS_NET_CALLOUT);
+    // try to check for packets to send every minute.
+    auto diff_time = current_time - last_network_attempt();
+    auto time_to_call = diff_time > minutes(1); // was 1200
+    if (!any && time_to_call && a_->current_net().sysnum && node_supports_callout) {
+      // also try this.
+      Clear();
+      attempt_callout();
+      any = true;
+    }
+    DrawScreen();
+    bout.okskey(false);
+    if (io->KeyPressed()) {
+      a_->set_at_wfc(false);
+      a_->ReadCurrentUser(sysop_usernum);
+      read_qscn(1, a()->context().qsc, false);
+      a_->set_at_wfc(true);
+      ch = to_upper_case<char>(io->GetChar());
+      if (ch == 0) {
+        ch = io->GetChar();
+        a_->handle_sysop_key(ch);
+        ch = 0;
+      }
+    } else {
+      ch = 0;
+      giveup_timeslice();
+    }
+    if (ch) {
+      a_->set_at_wfc(true);
+      any = true;
+      bout.okskey(true);
+      resetnsp();
+      io->SetCursor(LocalIO::cursorNormal);
+      switch (ch) {
+        // Local Logon
+      case SPACE:
+        lokb = LocalLogon();
+        break;
+        // Show WFC Menu
+      case '?': {
+        string helpFileName = SWFC_NOEXT;
+        char chHelp = ESC;
+        do {
+          io->Cls();
+          bout.nl();
+          print_help_file(helpFileName);
+          chHelp = bout.getkey();
+          helpFileName = (helpFileName == SWFC_NOEXT) ? SONLINE_NOEXT : SWFC_NOEXT;
+        } while (chHelp != SPACE && chHelp != ESC);
+      } break;
+      // Force Network Callout
+      case '/':
+        if (a_->current_net().sysnum) {
+          force_callout();
+        }
+        break;
+      case ',':
+        // Print NetLogs
+        if (a_->current_net().sysnum > 0 || !a_->net_networks.empty()) {
+          io->GotoXY(2, 23);
+          bout << "|#7(|#2Q|#7=|#2Quit|#7) Display Which NETDAT Log File (|#10|#7-|#12|#7): ";
+          ch = onek("Q012");
+          switch (ch) {
+          case '0':
+          case '1':
+          case '2': {
+            print_local_file(StringPrintf("netdat%c.log", ch));
+          } break;
+          }
+        }
+        break;
+        // Net List
+      case '`':
+        if (a_->current_net().sysnum) {
+          print_net_listing(true);
+        }
+        break;
+        // [ESC] Quit the BBS
+      case ESC:
+        io->GotoXY(2, 23);
+        bout << "|#7Exit the BBS? ";
+        if (yesno()) {
+          a_->QuitBBS();
+        }
+        io->Cls();
+        break;
+        // BoardEdit
+      case 'B':
+        write_inst(INST_LOC_BOARDEDIT, 0, INST_FLAGS_NONE);
+        boardedit();
+        cleanup_net();
+        break;
+        // ChainEdit
+      case 'C':
+        write_inst(INST_LOC_CHAINEDIT, 0, INST_FLAGS_NONE);
+        chainedit();
+        break;
+        // DirEdit
+      case 'D':
+        write_inst(INST_LOC_DIREDIT, 0, INST_FLAGS_NONE);
+        dlboardedit();
+        break;
+        // Send Email
+      case 'E':
+        Clear();
+        a_->usernum = 1;
+        bout.bputs("|#1Send Email:");
+        send_email();
+        a_->WriteCurrentUser(sysop_usernum);
+        cleanup_net();
+        break;
+      case 'F': {
+        Clear();
+        bout.bputs("|#1Enter Number: ");
+        auto x = input_number_or_key_raw(1, 0, 2112, true, {'Q', '?', '/'});
+        bout << "key: " << x.key << "; num: " << x.num;
+        pausescr();
+      } break;
+      // GfileEdit
+      case 'G':
+        write_inst(INST_LOC_GFILEEDIT, 0, INST_FLAGS_NONE);
+        gfileedit();
+        break;
+        // EventEdit
+      case 'H':
+        write_inst(INST_LOC_EVENTEDIT, 0, INST_FLAGS_NONE);
+        eventedit();
+        break;
+        // Send Internet Mail
+      case 'I': {
+        Clear();
+        a_->usernum = 1;
+        a_->SetUserOnline(true);
+        get_user_ppp_addr();
+        send_inet_email();
+        a_->SetUserOnline(false);
+        a_->WriteCurrentUser(sysop_usernum);
+        cleanup_net();
+      } break;
+      // ConfEdit
+      case 'J':
+        Clear();
+        edit_confs();
+        break;
+        // SendMailFile
+      case 'K': {
+        Clear();
+        a_->usernum = 1;
+        bout << "|#1Send any Text File in Email:\r\n\n|#2Filename: ";
+        auto buffer = input(50);
+        LoadFileIntoWorkspace(buffer, false);
+        send_email();
+        a_->WriteCurrentUser(sysop_usernum);
+        cleanup_net();
+      } break;
+      // Print Log Daily logs
+      case 'L': {
+        Clear();
+        auto status = a()->status_manager()->GetStatus();
+        print_local_file(status->GetLogFileName(0));
+      } break;
+      // Read User Mail
+      case 'M': {
+        Clear();
+        a_->usernum = sysop_usernum;
+        readmail(0);
+        a_->WriteCurrentUser(sysop_usernum);
+        cleanup_net();
+      } break;
+      // Print Net Log
+      case 'N': {
+        Clear();
+        print_local_file("net.log");
+      } break;
+      // EditTextFile
+      case 'O': {
+        Clear();
+        write_inst(INST_LOC_TEDIT, 0, INST_FLAGS_NONE);
+        bout << "\r\n|#1Edit any Text File: \r\n\n|#2Filename: ";
+        const auto current_dir_slash = StrCat(File::current_directory(), File::pathSeparatorString);
+        auto net_filename = input_path(current_dir_slash, 50);
+        if (!net_filename.empty()) {
+          external_text_edit(net_filename, "", 500, MSGED_FLAG_NO_TAGLINE);
+        }
+      } break;
+      // Print Network Pending list
+      case 'P': {
+        Clear();
+        print_pending_list();
+      } break;
+      // Quit BBS
+      case 'Q':
+        io->GotoXY(2, 23);
+        a_->QuitBBS();
+        break;
+        // Read All Mail
+      case 'R':
+        Clear();
+        write_inst(INST_LOC_MAILR, 0, INST_FLAGS_NONE);
+        mailr();
+        break;
+        // Print Current Status
+      case 'S':
+        prstatus();
+        bout.getkey();
+        break;
+      case 'T':
+        if (a()->terminal_command.empty()) {
+          bout << "Terminal Command not specified. " << wwiv::endl
+               << " Please set TERMINAL_CMD in wwiv.ini" << wwiv::endl;
+          bout.getkey();
+          break;
+        }
+        exec_cmdline(a()->terminal_command, INST_FLAGS_NONE);
+        break;
+      case 'U': {
+        // User edit
+        const auto exe = FilePath(a()->bindir(), "wwivconfig");
+        const auto cmd = StrCat(exe, " --user_editor");
+        exec_cmdline(cmd, INST_FLAGS_NONE);
+      } break;
+      case 'V': {
+        // InitVotes
+        Clear();
+        write_inst(INST_LOC_VOTEEDIT, 0, INST_FLAGS_NONE);
+        ivotes();
+      } break;
+      // Edit Gfile
+      case 'W': {
+        Clear();
+        write_inst(INST_LOC_TEDIT, 0, INST_FLAGS_NONE);
+        bout << "|#1Edit " << a()->config()->gfilesdir() << "<filename>: \r\n";
+        text_edit();
+      } break;
+      // Print Environment
+      case 'X':
+        break;
+        // Print Yesterday's Log
+      case 'Y': {
+        Clear();
+        auto status = a()->status_manager()->GetStatus();
+        print_local_file(status->GetLogFileName(1));
+      } break;
+      // Print Activity (Z) Log
+      case 'Z': {
+        zlog();
+        bout.nl();
+        bout.getkey();
+      } break;
+      }
+      Clear(); // moved from after getch
+      if (!a()->context().incom() && !lokb) {
+        frequent_init();
+        a_->ReadCurrentUser(sysop_usernum);
+        read_qscn(1, a()->context().qsc, false);
+        a_->reset_effective_sl();
+        a_->usernum = sysop_usernum;
+      }
+      catsl();
+      write_inst(INST_LOC_WFC, 0, INST_FLAGS_NONE);
+    }
+
+    if (!any) {
+      if (a_->IsCleanNetNeeded()) {
+        // let's try this.
+        Clear();
+        cleanup_net();
+      }
+      giveup_timeslice();
+    }
+  } while (!a()->context().incom() && !lokb);
+  return lokb;
+}
+
+int WFC::LocalLogon() {
+  a_->localIO()->GotoXY(2, 23);
+  bout << "|#9Log on to the BBS?";
+  auto d = steady_clock::now();
+  int lokb = 0;
+  // TODO(rushfan): use wwiv::os::wait_for
+  while (!a_->localIO()->KeyPressed() && (steady_clock::now() - d < minutes(1))) {
+    wwiv::os::sleep_for(10ms);
+  }
+
+  if (a_->localIO()->KeyPressed()) {
+    auto ch = to_upper_case<char>(a_->localIO()->GetChar());
+    if (ch == 'Y') {
+      a_->localIO()->Puts(YesNoString(true));
+      bout << wwiv::endl;
+      lokb = 1;
+    } else if (ch == 0 || static_cast<unsigned char>(ch) == 224) {
+      // The ch == 224 is a Win32'ism
+      a_->localIO()->GetChar();
+    } else {
+      auto fast = false;
+
+      if (ch == 'F') { // 'F' for Fast
+        a_->unx_ = 1;
+        fast = true;
+      } else {
+        switch (ch) {
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          fast = true;
+          a_->unx_ = ch - '0';
+          break;
+        }
+      }
+      if (!fast || a_->unx_ > a_->status_manager()->GetUserCount()) {
+        return lokb;
+      }
+
+      User tu;
+      a_->users()->readuser_nocache(&tu, a_->unx_);
+      if (tu.GetSl() != 255 || tu.IsUserDeleted()) {
+        return lokb;
+      }
+
+      a_->usernum = a_->unx_;
+      auto saved_at_wfc = a_->at_wfc();
+      a_->set_at_wfc(false);
+      a_->ReadCurrentUser();
+      read_qscn(a_->usernum, a()->context().qsc, false);
+      a_->set_at_wfc(saved_at_wfc);
+      bout.bputch(ch);
+      a_->localIO()->Puts("\r\n\r\n\r\n\r\n\r\n\r\n");
+      lokb = 2;
+      a_->reset_effective_sl();
+      changedsl();
+      if (!set_language(a_->user()->GetLanguage())) {
+        a_->user()->SetLanguage(0);
+        set_language(0);
+      }
+      return lokb;
+    }
+    if (ch == 0 || static_cast<unsigned char>(ch) == 224) {
+      // The 224 is a Win32'ism
+      a_->localIO()->GetChar();
+    }
+  }
+  if (lokb == 0) {
+    a_->Cls();
+  }
+  return lokb;
+}
+
+} // namespace bbs
+} // namespace wwiv

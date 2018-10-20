@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,38 +19,33 @@
 #define __INCLUDED_BBS_WFC_H__
 
 #include <memory>
+#include "bbs/application.h"
 
-#include "bbs/wfc_log.h"
-#include "initlib/curses_io.h"
-#include "initlib/curses_win.h"
+#include "localui/curses_io.h"
+#include "localui/curses_win.h"
 
+void wfc_cls(Application* a);
 
 namespace wwiv {
-namespace wfc {
+namespace bbs {
 
-class ControlCenter {
-public: 
-  ControlCenter();
-  ~ControlCenter();
-  void Initialize();
-  void Run();
-  void UpdateLog();
-  void TouchAll();
-  void RefreshAll();
+class WFC {
+public:
+  WFC(Application* a);
+  virtual ~WFC();
+
+  int doWFCEvents();
 
 private:
-  // Takes ownership of out to enure it's deleted on exit from the WFC.
-  std::unique_ptr<CursesIO> out_scope_;
-  std::unique_ptr<CursesWindow> commands_;
-  std::unique_ptr<CursesWindow> status_;
-  std::unique_ptr<CursesWindow> logs_;
-  std::unique_ptr<WfcLog> log_;
-};
-}  // namespace wfc
-}  // namespace wwiv
+  int LocalLogon();
+  void DrawScreen();
+  void Clear();
 
-void wfc_cls();
-void wfc_init();
-void wfc_screen();
+  Application* a_ = nullptr;
+  int status_ = 0;
+};
+
+}  // namespace bbs
+}  // namespace wwiv
 
 #endif  // __INCLUDED_BBS_WFC_H__

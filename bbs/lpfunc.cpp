@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -16,35 +16,49 @@
 /*    language governing permissions and limitations under the License.   */
 /*                                                                        */
 /**************************************************************************/
+#include "bbs/lpfunc.h"
+
 #include <string>
 #include <vector>
 
-#include "bbs/wwiv.h"
+#include "bbs/batch.h"
+#include "bbs/bbsovl3.h"
+#include "bbs/bbsutl.h"
+#include "bbs/bbs.h"
+
 #include "bbs/common.h"
 #include "bbs/listplus.h"
+#include "bbs/pause.h"
 #include "bbs/printfile.h"
-#include "bbs/keycodes.h"
-#include "bbs/wconstants.h"
+#include "local_io/keycodes.h"
+#include "bbs/xfer.h"
+#include "bbs/xferovl1.h"
+#include "bbs/utility.h"
+#include "local_io/wconstants.h"
+#include "core/stl.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
+#include "sdk/filenames.h"
 
 using std::string;
 using std::vector;
+using namespace wwiv::core;
+using namespace wwiv::stl;
 using namespace wwiv::strings;
 
 // Local function prototypes
-int  compare_criteria(struct search_record * sr, uploadsrec * ur);
-bool lp_compare_strings(char *raw, char *formula);
-bool lp_compare_strings_wh(char *raw, char *formula, unsigned *pos, int size);
-int  lp_get_token(char *formula, unsigned *pos);
-int  lp_get_value(char *raw, char *formula, unsigned *pos);
+int  compare_criteria(search_record * sr, uploadsrec * ur);
+bool lp_compare_strings(const char *raw, const char *formula);
+bool lp_compare_strings_wh(const char *raw, const char *formula, unsigned *pos, int size);
+int  lp_get_token(const char *formula, unsigned *pos);
+int  lp_get_value(const char *raw, const char *formula, unsigned *pos);
 
 // These are defined in listplus.cpp
 extern int bulk_move;
 extern bool ext_is_on;
 
 static void drawfile(int filepos, int filenum) {
-  lines_listed = 0;
+  bout.clear_lines_listed();
   bout.GotoXY(4, filepos + first_file_pos());
   bout.SystemColor(lp_config.current_file_color);
   bout.bprintf("%3d|#0", filenum);
@@ -52,9 +66,9 @@ static void drawfile(int filepos, int filenum) {
 }
 
 static void undrawfile(int filepos, int filenum) {
-  lines_listed = 0;
+  bout.clear_lines_listed();
   bout.GotoXY(4, filepos + first_file_pos());
-  bout.bprintf("|%2d%3d|#0", lp_config.file_num_color, filenum);
+  bout.bprintf("|%02d%3d|#0", lp_config.file_num_color, filenum);
 }
 
 static void prep_menu_items(vector<string>* menu_items) {
@@ -64,7 +78,7 @@ static void prep_menu_items(vector<string>* menu_items) {
   menu_items->push_back("Info");
   menu_items->push_back("ViewZip");
 
-  if (session()->using_modem != 0) {
+  if (a()->using_modem != 0) {
     menu_items->push_back("Dload");
   } else {
     menu_items->push_back("Move");
@@ -80,15 +94,26 @@ static void prep_menu_items(vector<string>* menu_items) {
   }
 }
 
+static void load_listing() {
+  a()->user()->data.lp_options |= cfl_fname;
+  a()->user()->data.lp_options |= cfl_description;
+
+  for (int i = 0; i < 32; i++) {
+    if (a()->user()->data.lp_colors[i] == 0) {
+      a()->user()->data.lp_colors[i] = 7;
+    }
+  }
+}
+
 int listfiles_plus_function(int type) {
   uploadsrec(*file_recs)[1];
   int file_handle[51];
   char vert_pos[51];
   int file_pos = 0, save_file_pos = 0, menu_pos = 0;
-  int save_dir = session()->GetCurrentFileArea();
+  size_t save_dir = a()->current_user_dir_num();
   bool sysop_mode = false;
-  struct side_menu_colors smc;
-  struct search_record search_rec;
+  side_menu_colors smc{};
+  search_record search_rec = {};
 
   load_lp_config();
 
@@ -102,7 +127,7 @@ int listfiles_plus_function(int type) {
   vector<string> menu_items;
   prep_menu_items(&menu_items);
 
-  file_recs = (uploadsrec(*)[1])(BbsAllocA((session()->user()->GetScreenLines() + 20) * sizeof(uploadsrec)));
+  file_recs = (uploadsrec(*)[1])(BbsAllocA((a()->user()->GetScreenLines() + 20) * sizeof(uploadsrec)));
   WWIV_ASSERT(file_recs);
   if (!file_recs) {
     return 0;
@@ -113,11 +138,10 @@ int listfiles_plus_function(int type) {
   }
   int max_lines = calc_max_lines();
 
-  g_num_listed = 0;
   bool all_done = false;
-  for (int this_dir = 0; (this_dir < session()->num_dirs) && (!hangup) && (udir[this_dir].subnum != -1)
+  for (uint16_t this_dir = 0; (this_dir < a()->directories.size()) && (!a()->hangup_) && (a()->udir[this_dir].subnum != -1)
        && !all_done; this_dir++) {
-    int also_this_dir = udir[this_dir].subnum;
+    int also_this_dir = a()->udir[this_dir].subnum;
     bool scan_dir = false;
     checka(&all_done);
 
@@ -126,7 +150,7 @@ int listfiles_plus_function(int type) {
         scan_dir = true;
       }
     } else {
-      if (qsc_n[also_this_dir / 32] & (1L << (also_this_dir % 32))) {
+      if (a()->context().qsc_n[also_this_dir / 32] & (1L << (also_this_dir % 32))) {
         scan_dir = true;
       }
 
@@ -137,9 +161,8 @@ int listfiles_plus_function(int type) {
 
     int save_first_file = 0;
     if (scan_dir) {
-      session()->SetCurrentFileArea(this_dir);
+      a()->set_current_user_dir_num(this_dir);
       dliscan();
-      g_num_listed = 0;
       int first_file = save_first_file = 1;
       int amount = 0;
       bool done = false;
@@ -147,8 +170,8 @@ int listfiles_plus_function(int type) {
       int lines = 0;
       int changedir = 0;
 
-      File fileDownload(g_szDownloadFileName);
-      while (!done && !hangup && !all_done) {
+      File fileDownload(a()->download_filename_);
+      while (!done && !a()->hangup_ && !all_done) {
         checka(&all_done);
         if (!amount) {
           if (!fileDownload.Open(File::modeBinary | File::modeReadOnly)) {
@@ -157,7 +180,7 @@ int listfiles_plus_function(int type) {
           }
           print_searching(&search_rec);
         }
-        if (session()->numf) {
+        if (a()->numf) {
           changedir = 0;
           bool force_menu = false;
           FileAreaSetRecord(fileDownload, first_file + amount);
@@ -173,12 +196,10 @@ int listfiles_plus_function(int type) {
               vert_pos[matches] = static_cast<char>(lines);
               int lines_used = printinfo_plus(file_recs[matches], file_handle[matches],
                                               check_batch_queue(file_recs[matches]->filename), lines_left, &search_rec);
-#ifdef EXTRA_SPACE
               if (lines_used > 1 && lines_used < lines_left) {
                 bout.nl();
                 ++lines_used;
               }
-#endif
               lines += lines_used;
               ++matches;
             } else {
@@ -189,7 +210,7 @@ int listfiles_plus_function(int type) {
             ++amount;
           }
 
-          if (lines >= max_lines || session()->numf < first_file + amount || force_menu) {
+          if (lines >= max_lines || a()->numf < first_file + amount || force_menu) {
             fileDownload.Close();
             if (matches) {
               file_pos = save_file_pos;
@@ -197,7 +218,7 @@ int listfiles_plus_function(int type) {
               bool redraw = true;
               save_file_pos = 0;
               bool menu_done = false;
-              while (!menu_done && !hangup) {
+              while (!menu_done && !a()->hangup_) {
                 int command = side_menu(&menu_pos, redraw, menu_items, 2, max_lines + first_file_pos() + 1, &smc);
                 redraw = true;
                 bulk_move = 0;
@@ -222,7 +243,7 @@ int listfiles_plus_function(int type) {
                 case '?':
                 case CO:
                   bout.cls();
-                  printfile(LISTPLUS_HLP);
+                  print_help_file(LISTPLUS_HLP);
                   pausescr();
                   menu_done = true;
                   amount = lines = matches = 0;
@@ -254,7 +275,7 @@ int listfiles_plus_function(int type) {
                   case 0:
                     save_first_file = first_file;
                     first_file += amount;
-                    if (first_file > session()->numf) {
+                    if (first_file > a()->numf) {
                       done = true;
                     }
                     menu_done = true;
@@ -281,41 +302,22 @@ int listfiles_plus_function(int type) {
                       amount = lines = matches = 0;
                     } else {
 ADD_OR_REMOVE_BATCH:
-#ifdef KBPERDAY
-                      kbbatch += bytes_to_k(file_recs[file_pos]->numbytes);
-#endif
                       if (find_batch_queue(file_recs[file_pos]->filename) > -1) {
                         remove_batch(file_recs[file_pos]->filename);
                         redraw = false;
                       }
-#ifdef FILE_POINTS
-                      else if (((!(file_recs[file_pos]->mask & mask_validated)) ||
-                                ((file_recs[file_pos]->filepoints > session()->user()->GetFilePoints())) &&
-                                !session()->user()->IsExemptRatio()) &&
-                               !sysop_mode) {
-                        bout.cls();
-                        bout << "You don't have enough file points to download this file\r\n";
-                        bout << "Or this file is not validated yet.\r\n";
-#else
                       else if (!ratio_ok() && !sysop_mode) {
-#endif
                         menu_done = true;
                         amount = lines = matches = 0;
                         save_file_pos = file_pos;
                         pausescr();
                       } else {
-                        char szTempFile[MAX_PATH];
                         redraw = false;
-                        if (!(directories[udir[session()->GetCurrentFileArea()].subnum].mask & mask_cdrom) && !sysop_mode) {
-                          strcpy(szTempFile, directories[udir[session()->GetCurrentFileArea()].subnum].path);
-                          strcat(szTempFile, file_recs[file_pos]->filename);
-                          unalign(szTempFile);
-                          if (sysop_mode || !session()->using_modem || File::Exists(szTempFile)) {
-#ifdef FILE_POINTS
-                            fpts = 0;
-                            fpts = (file_recs[file_pos]->filepoints);
-#endif
-                            lp_add_batch(file_recs[file_pos]->filename, udir[session()->GetCurrentFileArea()].subnum,
+                        if (!(a()->directories[a()->current_user_dir().subnum].mask & mask_cdrom) && !sysop_mode) {
+                          auto tf = FilePath(a()->directories[a()->current_user_dir().subnum].path,
+                                             unalign(file_recs[file_pos]->filename));
+                          if (sysop_mode || !a()->using_modem || File::Exists(tf)) {
+                            lp_add_batch(file_recs[file_pos]->filename, a()->current_user_dir().subnum,
                                          file_recs[file_pos]->numbytes);
                           } else if (lp_config.request_file) {
                             menu_done = true;
@@ -323,14 +325,11 @@ ADD_OR_REMOVE_BATCH:
                             request_file(file_recs[file_pos]->filename);
                           }
                         } else {
-                          lp_add_batch(file_recs[file_pos]->filename, udir[session()->GetCurrentFileArea()].subnum,
+                          lp_add_batch(file_recs[file_pos]->filename, a()->current_user_dir().subnum,
                                        file_recs[file_pos]->numbytes);
                         }
                       }
-#ifdef KBPERDAY
-                      kbbatch -= bytes_to_k(file_recs[file_pos]->numbytes);
-#endif
-                      bout.GotoXY(1, first_file_pos() + vert_pos[file_pos] - 1);
+                      bout.GotoXY(1, first_file_pos() + vert_pos[file_pos]);
                       bout.bprintf("|%2d %c ", lp_config.tagged_color,
                                                         check_batch_queue(file_recs[file_pos]->filename) ? '\xFE' : ' ');
                       undrawfile(vert_pos[file_pos], file_handle[file_pos]);
@@ -371,21 +370,12 @@ ADD_OR_REMOVE_BATCH:
                     menu_pos = 0;
                     break;
                   case 5:
-                    if (!sysop_mode && session()->using_modem) {
+                    if (!sysop_mode && a()->using_modem) {
                       bout.cls();
                       menu_done = true;
                       save_file_pos = file_pos;
                       amount = lines = matches = 0;
-#ifdef FILE_POINTS
-                      if (((!(file_recs[file_pos]->mask & mask_validated))
-                           || ((file_recs[file_pos]->filepoints > session()->user()->GetFilePoints())) &&
-                           !session()->user()->IsExemptRatio()) && !sysop_mode) {
-                        bout.cls();
-                        bout << "You don't have enough file points to download this file\r\n";
-                        bout << "Or this file is not validated yet.\r\n";
-#else
                       if (!ratio_ok()) {
-#endif
                         pausescr();
                       } else {
                         if (!ratio_ok()  && !sysop_mode) {
@@ -394,18 +384,13 @@ ADD_OR_REMOVE_BATCH:
                           save_file_pos = file_pos;
                           pausescr();
                         } else {
-                          char szTempFile[MAX_PATH];
                           redraw = false;
-                          if (!(directories[udir[session()->GetCurrentFileArea()].subnum].mask & mask_cdrom) && !sysop_mode) {
-                            strcpy(szTempFile, directories[udir[session()->GetCurrentFileArea()].subnum].path);
-                            strcat(szTempFile, file_recs[file_pos]->filename);
-                            unalign(szTempFile);
-                            if (sysop_mode || !session()->using_modem || File::Exists(szTempFile)) {
-#ifdef FILE_POINTS
-                              fpts = 0;
-                              fpts = (file_recs[file_pos]->filepoints);
-#endif
-                              lp_add_batch(file_recs[file_pos]->filename, udir[session()->GetCurrentFileArea()].subnum,
+                          if (!(a()->directories[a()->current_user_dir().subnum].mask & mask_cdrom) && !sysop_mode) {
+                            auto tf =
+                                FilePath(a()->directories[a()->current_user_dir().subnum].path,
+                                         unalign(file_recs[file_pos]->filename));
+                            if (sysop_mode || !a()->using_modem || File::Exists(tf)) {
+                              lp_add_batch(file_recs[file_pos]->filename, a()->current_user_dir().subnum,
                                            file_recs[file_pos]->numbytes);
                             } else if (lp_config.request_file) {
                               menu_done = true;
@@ -413,7 +398,7 @@ ADD_OR_REMOVE_BATCH:
                               request_file(file_recs[file_pos]->filename);
                             }
                           } else {
-                            lp_add_batch(file_recs[file_pos]->filename, udir[session()->GetCurrentFileArea()].subnum,
+                            lp_add_batch(file_recs[file_pos]->filename, a()->current_user_dir().subnum,
                                          file_recs[file_pos]->numbytes);
                           }
                           download_plus(file_recs[file_pos]->filename);
@@ -442,16 +427,16 @@ ADD_OR_REMOVE_BATCH:
                     amount = lines = matches = 0;
                     first_file = 1;
                     changedir = 1;
-                    if ((session()->GetCurrentFileArea() < session()->num_dirs - 1)
-                        && (udir[session()->GetCurrentFileArea() + 1].subnum >= 0)) {
-                      session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+                    if ((a()->current_user_dir_num() < size_int(a()->directories) - 1)
+                        && (a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)) {
+                      a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
                       ++this_dir;
                     } else {
-                      session()->SetCurrentFileArea(0);
+                      a()->set_current_user_dir_num(0);
                       this_dir = 0;
                     }
                     if (!type) {
-                      save_dir = session()->GetCurrentFileArea();
+                      save_dir = a()->current_user_dir_num();
                     }
                     dliscan();
                     menu_pos = 0;
@@ -461,18 +446,18 @@ ADD_OR_REMOVE_BATCH:
                     amount = lines = matches = 0;
                     first_file = 1;
                     changedir = -1;
-                    if (session()->GetCurrentFileArea() > 0) {
-                      session()->SetCurrentFileArea(session()->GetCurrentFileArea() - 1);
+                    if (a()->current_user_dir_num() > 0) {
+                      a()->set_current_user_dir_num(a()->current_user_dir_num() - 1);
                       --this_dir;
                     } else {
-                      while ((udir[session()->GetCurrentFileArea() + 1].subnum >= 0)
-                             && (session()->GetCurrentFileArea() < session()->num_dirs - 1)) {
-                        session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+                      while ((a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)
+                             && (a()->current_user_dir_num() < size_int(a()->directories) - 1)) {
+                        a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
                       }
-                      this_dir = session()->GetCurrentFileArea();
+                      this_dir = a()->current_user_dir_num();
                     }
                     if (!type) {
-                      save_dir = session()->GetCurrentFileArea();
+                      save_dir = a()->current_user_dir_num();
                     }
                     dliscan();
                     menu_pos = 0;
@@ -480,7 +465,7 @@ ADD_OR_REMOVE_BATCH:
                   case 8:
 TOGGLE_EXTENDED:
                     ext_is_on = !ext_is_on;
-                    session()->user()->SetFullFileDescriptions(!session()->user()->GetFullFileDescriptions());
+                    a()->user()->SetFullFileDescriptions(!a()->user()->GetFullFileDescriptions());
                     menu_done = true;
                     amount = lines = matches = 0;
                     file_pos = 0;
@@ -492,11 +477,11 @@ TOGGLE_EXTENDED:
                     done = true;
                     amount = lines = matches = 0;
                     all_done = true;
-                    lines_listed = 0;
+                    bout.clear_lines_listed();
                     break;
                   case 10:
                     bout.cls();
-                    printfile(LISTPLUS_HLP);
+                    print_help_file(LISTPLUS_HLP);
                     pausescr();
                     menu_done = true;
                     amount = lines = matches = 0;
@@ -514,7 +499,7 @@ TOGGLE_EXTENDED:
                       sysop_mode = false;
                       prep_menu_items(&menu_items);
                     }
-                    bputch('\r');
+                    bout.bputch('\r');
                     bout.clreol();
                     break;
                   }
@@ -532,20 +517,20 @@ TOGGLE_EXTENDED:
               if (!changedir) {
                 done = true;
               } else if (changedir == 1) {
-                if ((session()->GetCurrentFileArea() < session()->num_dirs - 1)
-                    && (udir[session()->GetCurrentFileArea() + 1].subnum >= 0)) {
-                  session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+                if ((a()->current_user_dir_num() < size_int(a()->directories) - 1)
+                    && (a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)) {
+                  a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
                 } else {
-                  session()->SetCurrentFileArea(0);
+                  a()->set_current_user_dir_num(0);
                 }
                 dliscan();
               } else {
-                if (session()->GetCurrentFileArea() > 0) {
-                  session()->SetCurrentFileArea(session()->GetCurrentFileArea() - 1);
+                if (a()->current_user_dir_num() > 0) {
+                  a()->set_current_user_dir_num(a()->current_user_dir_num() - 1);
                 } else {
-                  while ((udir[session()->GetCurrentFileArea() + 1].subnum >= 0)
-                         && (session()->GetCurrentFileArea() < session()->num_dirs - 1)) {
-                    session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+                  while ((a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)
+                         && (a()->current_user_dir_num() < size_int(a()->directories) - 1)) {
+                    a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
                   }
                 }
                 dliscan();
@@ -557,20 +542,20 @@ TOGGLE_EXTENDED:
           if (!changedir) {
             done = true;
           } else if (changedir == 1) {
-            if ((session()->GetCurrentFileArea() < session()->num_dirs - 1)
-                && (udir[session()->GetCurrentFileArea() + 1].subnum >= 0)) {
-              session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+            if ((a()->current_user_dir_num() < size_int(a()->directories) - 1)
+                && (a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)) {
+              a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
             } else {
-              session()->SetCurrentFileArea(0);
+              a()->set_current_user_dir_num(0);
             }
             dliscan();
           } else {
-            if (session()->GetCurrentFileArea() > 0) {
-              session()->SetCurrentFileArea(session()->GetCurrentFileArea() - 1);
+            if (a()->current_user_dir_num() > 0) {
+              a()->set_current_user_dir_num(a()->current_user_dir_num() - 1);
             } else {
-              while ((udir[session()->GetCurrentFileArea() + 1].subnum >= 0)
-                     && (session()->GetCurrentFileArea() < session()->num_dirs - 1)) {
-                session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+              while ((a()->udir[a()->current_user_dir_num() + 1].subnum >= 0)
+                     && (a()->current_user_dir_num() < size_int(a()->directories) - 1)) {
+                a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
               }
             }
             dliscan();
@@ -584,10 +569,10 @@ TOGGLE_EXTENDED:
   return (all_done) ? 1 : 0;
 }
 
-int compare_criteria(struct search_record * sr, uploadsrec * ur) {
+int compare_criteria(search_record * sr, uploadsrec * ur) {
   // "        .   "
-  if (!wwiv::strings::IsEquals(sr->filemask, "        .   ")) {
-    if (!compare(sr->filemask, ur->filename)) {
+  if (sr->filemask != "        .   ") {
+    if (!compare(sr->filemask.c_str(), ur->filename)) {
       return 0;
     }
   }
@@ -602,43 +587,34 @@ int compare_criteria(struct search_record * sr, uploadsrec * ur) {
 
   // the above test was passed if it got here
   if (sr->search[0]) {
-    char *buff = nullptr;
     int desc_len = 0, fname_len = 0, ext_len = 0;
 
     // we want to seach the filename, description and ext description
     // as one unit, that way, if you specify something like 'one & two
     // and one is located in the description and two is in the
     // extended description, then it will properly find the search
+    string buff;
     if (sr->search_extended && ur->mask & mask_extended) {
       buff = read_extended_description(ur->filename);
     }
 
     desc_len = strlen(ur->description);
 
-    if (buff) {
-      ext_len = strlen(buff);
+    if (!buff.empty()) {
+      ext_len = buff.size();
+    } else {
+      // Something had something.
+      return 0;
     }
     fname_len = strlen(ur->filename);
 
-    buff = reinterpret_cast<char*>(realloc(buff, desc_len + ext_len + fname_len + 10));
-    if (!buff) {
-      return 0;
-    }
-
-    buff[ext_len] = '\0';
-
     // tag the file name and description on to the end of the extended
     // description (if there is one)
-    strcat(buff, " ");
-    strcat(buff, ur->filename);
-    strcat(buff, " ");
-    strcat(buff, ur->description);
+    buff += StrCat(" ", ur->filename, " ", ur->description);
 
-    if (lp_compare_strings(buff, sr->search)) {
-      free(buff);
+    if (lp_compare_strings(buff.c_str(), sr->search.c_str())) {
       return 1;
     }
-    free(buff);
 
     return 0;                               // if we get here, we failed search test, so exit with 0 */
 
@@ -648,15 +624,13 @@ int compare_criteria(struct search_record * sr, uploadsrec * ur) {
   // have passed the test
 }
 
-
-bool lp_compare_strings(char *raw, char *formula) {
+bool lp_compare_strings(const char *raw, const char *formula) {
   unsigned i = 0;
 
   return lp_compare_strings_wh(raw, formula, &i, strlen(formula));
 }
 
-
-bool lp_compare_strings_wh(char *raw, char *formula, unsigned *pos, int size) {
+bool lp_compare_strings_wh(const char *raw, const  char *formula, unsigned *pos, int size) {
   bool rvalue;
   int token;
 
@@ -687,9 +661,7 @@ bool lp_compare_strings_wh(char *raw, char *formula, unsigned *pos, int size) {
   return lvalue;
 }
 
-
-int lp_get_token(char *formula, unsigned *pos) {
-  char szBuffer[255];
+int lp_get_token(const char *formula, unsigned *pos) {
   int tpos = 0;
 
   while (formula[*pos] && isspace(formula[*pos])) {
@@ -699,18 +671,15 @@ int lp_get_token(char *formula, unsigned *pos) {
   if (isalpha(formula[*pos])) {
     // remove isspace to delemit on a by word basis
     while (isalnum(formula[*pos]) || isspace(formula[*pos])) {
-      szBuffer[tpos] = formula[*pos];
       ++tpos;
       ++*pos;
     }
-    szBuffer[tpos] = 0;
   }
   ++*pos;
   return formula[*pos - 1];
 }
 
-
-int lp_get_value(char *raw, char *formula, unsigned *pos) {
+int lp_get_value(const char *raw, const char *formula, unsigned *pos) {
   char szBuffer[255];
   int tpos = 0;
   int sign = 1, started_number = 0;

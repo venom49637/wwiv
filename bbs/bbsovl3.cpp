@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,210 +19,17 @@
 #include <string>
 #include "bbs/bbsovl3.h"
 
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/com.h"
+#include "bbs/bgetch.h"
+#include "bbs/utility.h"
 #include "core/strings.h"
 #include "core/wwivassert.h"
-#include "bbs/keycodes.h"
-#include "bbs/wconstants.h"
+#include "local_io/keycodes.h"
+#include "local_io/wconstants.h"
 
 using std::string;
-
-// The final character of an ansi sequence
-#define OB ('[')
-#define O ('O')
-#define A_HOME ('H')
-#define A_LEFT ('D')
-#define A_END ('K')
-#define A_UP ('A')
-#define A_DOWN ('B')
-#define A_RIGHT ('C')
-#define A_INSERT ('r')
-#define A_DELETE ('s')
-
-static int pd_getkey() {
-  g_flags |= g_flag_allow_extended;
-  int x = getkey();
-  g_flags &= ~g_flag_allow_extended;
-  return x;
-}
-
-int get_kb_event(int nNumLockMode) {
-  session()->localIO()->tleft(true);
-  time_t time1 = time(nullptr);
-
-  do {
-    time_t time2 = time(nullptr);
-    if (difftime(time2, time1) > 180) {
-      // greater than 3 minutes
-      hangup = true;
-      return 0;
-    }
-    if (hangup) {
-      return 0;
-    }
-
-    if (bkbhitraw() || session()->localIO()->LocalKeyPressed()) {
-      if (!incom || session()->localIO()->LocalKeyPressed()) {
-        // Check for local keys
-        int key = session()->localIO()->LocalGetChar();
-        if (key == CBACKSPACE) {
-          return COMMAND_DELETE;
-        }
-        if (key == CV) {
-          return COMMAND_INSERT;
-        }
-        if (key == RETURN || key == CL) {
-          return EXECUTE;
-        }
-        if ((key == 0 || key == 224) && session()->localIO()->LocalKeyPressed()) {
-          // 224 is E0. See https://msdn.microsoft.com/en-us/library/078sfkak(v=vs.110).aspx
-          return session()->localIO()->LocalGetChar() + 256;
-        } else {
-          if (nNumLockMode == NOTNUMBERS) {
-            switch (key) {
-            case '8':
-              return COMMAND_UP;
-            case '4':
-              return COMMAND_LEFT;
-            case '2':
-              return COMMAND_DOWN;
-            case '6':
-              return COMMAND_RIGHT;
-            case '0':
-              return COMMAND_INSERT;
-            case '.':
-              return COMMAND_DELETE;
-            case '9':
-              return COMMAND_PAGEUP;
-            case '3':
-              return COMMAND_PAGEDN;
-            case '7':
-              return COMMAND_HOME;
-            case '1':
-              return COMMAND_END;
-            }
-          }
-          switch (key) {
-          case TAB:
-            return TAB;
-          case ESC:
-            return GET_OUT;
-          default:
-            return key;
-          }
-        }
-      } else if (bkbhitraw()) {
-        int key = pd_getkey();
-
-        if (key == CBACKSPACE) {
-          return COMMAND_DELETE;
-        }
-        if (key == CV) {
-          return COMMAND_INSERT;
-        }
-        if (key == RETURN || key == CL) {
-          return EXECUTE;
-        } else if (key == ESC) {
-          time_t esc_time1 = time(nullptr);
-          time_t esc_time2 = time(nullptr);
-          do {
-            esc_time2 = time(nullptr);
-            if (bkbhitraw()) {
-              key = pd_getkey();
-              if (key == OB || key == O) {
-                key = pd_getkey();
-
-                // Check for a second set of brackets
-                if (key == OB || key == O) {
-                  key = pd_getkey();
-                }
-
-                switch (key) {
-                case A_UP:
-                  return COMMAND_UP;
-                case A_LEFT:
-                  return COMMAND_LEFT;
-                case A_DOWN:
-                  return COMMAND_DOWN;
-                case A_RIGHT:
-                  return COMMAND_RIGHT;
-                case A_INSERT:
-                  return COMMAND_INSERT;
-                case A_DELETE:
-                  return COMMAND_DELETE;
-                case A_HOME:
-                  return COMMAND_HOME;
-                case A_END:
-                  return COMMAND_END;
-                default:
-                  return key;
-                }
-              } else {
-                return GET_OUT;
-              }
-            }
-          } while (difftime(esc_time2, esc_time1) < 1 && !hangup);
-
-          if (difftime(esc_time2, esc_time1) >= 1) {     // if no keys followed ESC
-            return GET_OUT;
-          }
-        } else {
-          if (!key) {
-            if (session()->localIO()->LocalKeyPressed()) {
-              key = session()->localIO()->LocalGetChar();
-              return (key + 256);
-            }
-          }
-          if (nNumLockMode == NOTNUMBERS) {
-            switch (key) {
-            case '8':
-              return COMMAND_UP;
-            case '4':
-              return COMMAND_LEFT;
-            case '2':
-              return COMMAND_DOWN;
-            case '6':
-              return COMMAND_RIGHT;
-            case '0':
-              return COMMAND_INSERT;
-            case '.':
-              return COMMAND_DELETE;
-            case '9':
-              return COMMAND_PAGEUP;
-            case '3':
-              return COMMAND_PAGEDN;
-            case '7':
-              return COMMAND_HOME;
-            case '1':
-              return COMMAND_END;
-            }
-          }
-          return key;
-        }
-      }
-      time1 = time(nullptr);                           // reset timer
-    } else {
-      giveup_timeslice();
-    }
-
-  } while (!hangup);
-  return 0;                                 // must have hung up
-}
-
-// Like onek but does not put cursor down a line
-// One key, no carriage return
-char onek_ncr(const char *pszAllowableChars) {
-  WWIV_ASSERT(pszAllowableChars);
-
-  char ch = '\0';
-  while (!strchr(pszAllowableChars, ch = wwiv::UpperCase<char>(getkey())) && !hangup)
-    ;
-  if (hangup) {
-    ch = pszAllowableChars[0];
-  }
-  bputch(ch);
-  return ch;
-}
+using namespace wwiv::core;
 
 bool do_sysop_command(int nCommandID) {
   unsigned int nKeyStroke = 0;
@@ -279,7 +86,7 @@ bool do_sysop_command(int nCommandID) {
       bout.cls();
     }
 
-    session()->localIO()->skey(static_cast<char>(nKeyStroke));
+    a()->handle_sysop_key(static_cast<uint8_t>(nKeyStroke));
 
     if (bNeedToRedraw) {
       bout.cls();

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,39 +17,88 @@
 /*                                                                        */
 /**************************************************************************/
 
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <string>
 
 #include "bbs/attach.h"
 #include "bbs/automsg.h"
+#include "bbs/batch.h"
+#include "bbs/bbsovl1.h"
+#include "bbs/bbsovl2.h"
+#include "bbs/bbsutl1.h"
 #include "bbs/chat.h"
+#include "bbs/chains.h"
+#include "bbs/chnedit.h"
+#include "bbs/com.h"
+#include "bbs/conf.h"
 #include "bbs/confutil.h"
 #include "bbs/datetime.h"
+#include "bbs/defaults.h"
+#include "bbs/diredit.h"
+#include "bbs/dirlist.h"
 #include "bbs/dropfile.h"
+#include "bbs/events.h"
 #include "bbs/external_edit.h"
+#include "bbs/finduser.h"
+#include "bbs/gfileedit.h"
+#include "bbs/gfiles.h"
 #include "bbs/input.h"
+#include "bbs/inetmsg.h"
 #include "bbs/instmsg.h"
-#include "bbs/keycodes.h"
+#include "local_io/keycodes.h"
+#include "bbs/listplus.h"
 #include "bbs/menu.h"
 #include "bbs/menusupp.h"
+#include "bbs/message_file.h"
+#include "bbs/misccmd.h"
+#include "bbs/msgbase1.h"
 #include "bbs/multinst.h"
+#include "bbs/multmail.h"
 #include "bbs/netsup.h"
 #include "bbs/newuser.h"
+#include "bbs/quote.h"
 #include "bbs/pause.h"
-#include "bbs/uedit.h"
+#include "bbs/readmail.h"
+#include "bbs/subedit.h"
+#include "bbs/sysoplog.h"
 #include "bbs/valscan.h"
 #include "bbs/vote.h"
 #include "bbs/voteedit.h"
-#include "bbs/wwiv.h"
-#include "bbs/wconstants.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/shortmsg.h"
+#include "bbs/sr.h"
+#include "bbs/subacc.h"
+#include "bbs/sysopf.h"
+#include "bbs/utility.h"
+#include "bbs/wqscn.h"
+#include "bbs/xfer.h"
+#include "bbs/xferovl.h"
+#include "bbs/xferovl1.h"
+#include "bbs/xfertmp.h"
+
+#include "local_io/wconstants.h"
+#include "bbs/workspace.h"
 #include "bbs/printfile.h"
-#include "bbs/wstatus.h"
+#include "sdk/status.h"
+#include "core/os.h"
+#include "core/stl.h"
 #include "core/strings.h"
+#include "core/version.h"
+#include "sdk/filenames.h"
+#include "sdk/user.h"
 
 using std::string;
 using wwiv::bbs::InputMode;
 using wwiv::bbs::TempDisablePause;
+using namespace wwiv::bbs;
+using namespace wwiv::core;
 using namespace wwiv::menus;
+using namespace wwiv::sdk;
+using namespace wwiv::stl;
+using namespace wwiv::strings;
 
 void UnQScan() {
   bout.nl();
@@ -60,17 +109,18 @@ void UnQScan() {
   case RETURN:
     break;
   case 'A': {
-    for (int i = 0; i < session()->GetMaxNumberMessageAreas(); i++) {
-      qsc_p[i] = 0;
+    for (int i = 0; i < a()->config()->max_subs(); i++) {
+      a()->context().qsc_p[i] = 0;
     }
     bout << "\r\nQ-Scan pointers reset.\r\n\n";
   }
   break;
   case 'C': {
     bout.nl();
-    qsc_p[usub[session()->GetCurrentMessageArea()].subnum] = 0;
-    bout << "Messages on " << subboards[usub[session()->GetCurrentMessageArea()].subnum].name <<
-                       " marked as unread.\r\n";
+    a()->context().qsc_p[a()->current_user_sub().subnum] = 0;
+    bout << "Messages on " 
+         << a()->subs().sub(a()->current_user_sub().subnum).name
+         << " marked as unread.\r\n";
   }
   break;
   }
@@ -81,59 +131,58 @@ void DirList() {
 }
 
 void UpSubConf() {
-  if (okconf(session()->user())) {
-    if ((session()->GetCurrentConferenceMessageArea() < subconfnum - 1)
-        && (uconfsub[session()->GetCurrentConferenceMessageArea() + 1].confnum >= 0)) {
-      session()->SetCurrentConferenceMessageArea(session()->GetCurrentConferenceMessageArea() + 1);
+  if (okconf(a()->user())) {
+    if ((a()->GetCurrentConferenceMessageArea() < a()->subconfs.size() - 1)
+        && (a()->uconfsub[a()->GetCurrentConferenceMessageArea() + 1].confnum >= 0)) {
+      a()->SetCurrentConferenceMessageArea(a()->GetCurrentConferenceMessageArea() + 1);
     } else {
-      session()->SetCurrentConferenceMessageArea(0);
+      a()->SetCurrentConferenceMessageArea(0);
     }
-    setuconf(CONF_SUBS, session()->GetCurrentConferenceMessageArea(), -1);
+    setuconf(ConferenceType::CONF_SUBS, a()->GetCurrentConferenceMessageArea(), -1);
   }
 }
 
 void DownSubConf() {
-  if (okconf(session()->user())) {
-    if (session()->GetCurrentConferenceMessageArea() > 0) {
-      session()->SetCurrentConferenceMessageArea(session()->GetCurrentConferenceMessageArea() - 1);
+  if (okconf(a()->user())) {
+    if (a()->GetCurrentConferenceMessageArea() > 0) {
+      a()->SetCurrentConferenceMessageArea(a()->GetCurrentConferenceMessageArea() - 1);
     } else {
-      while (uconfsub[session()->GetCurrentConferenceMessageArea() + 1].confnum >= 0
-             && session()->GetCurrentConferenceMessageArea() < subconfnum - 1) {
-        session()->SetCurrentConferenceMessageArea(session()->GetCurrentConferenceMessageArea() + 1);
+      while (a()->uconfsub[a()->GetCurrentConferenceMessageArea() + 1].confnum >= 0 &&
+             a()->GetCurrentConferenceMessageArea() < a()->subconfs.size() - 1) {
+        a()->SetCurrentConferenceMessageArea(a()->GetCurrentConferenceMessageArea() + 1);
       }
     }
-    setuconf(CONF_SUBS, session()->GetCurrentConferenceMessageArea(), -1);
+    setuconf(ConferenceType::CONF_SUBS, a()->GetCurrentConferenceMessageArea(), -1);
   }
 }
 
 void DownSub() {
-  if (session()->GetCurrentMessageArea() > 0) {
-    session()->SetCurrentMessageArea(session()->GetCurrentMessageArea() - 1);
+  if (a()->current_user_sub_num() > 0) {
+    a()->set_current_user_sub_num(a()->current_user_sub_num() - 1);
   } else {
-    while (usub[session()->GetCurrentMessageArea() + 1].subnum >= 0 &&
-           session()->GetCurrentMessageArea() < session()->num_subs - 1) {
-      session()->SetCurrentMessageArea(session()->GetCurrentMessageArea() + 1);
+    while (a()->usub[a()->current_user_sub_num() + 1].subnum >= 0 &&
+           a()->current_user_sub_num() < a()->subs().subs().size() - 1) {
+      a()->set_current_user_sub_num(a()->current_user_sub_num() + 1);
     }
   }
 }
 
 void UpSub() {
-  if (session()->GetCurrentMessageArea() < session()->num_subs - 1 &&
-      usub[session()->GetCurrentMessageArea() + 1].subnum >= 0) {
-    session()->SetCurrentMessageArea(session()->GetCurrentMessageArea() + 1);
+  if (a()->current_user_sub_num() < a()->subs().subs().size() - 1 &&
+      a()->usub[a()->current_user_sub_num() + 1].subnum >= 0) {
+    a()->set_current_user_sub_num(a()->current_user_sub_num() + 1);
   } else {
-    session()->SetCurrentMessageArea(0);
+    a()->set_current_user_sub_num(0);
   }
 }
 
 void ValidateUser() {
   bout.nl(2);
   bout << "|#9Enter user name or number:\r\n:";
-  string userName;
-  input(&userName, 30, true);
-  int nUserNum = finduser1(userName.c_str());
+  string userName = input_upper(30);
+  int nUserNum = finduser1(userName);
   if (nUserNum > 0) {
-    sysoplogf("@ Validated user #%d", nUserNum);
+    sysoplog() << "@ Validated user #" << nUserNum;
     valuser(nUserNum);
   } else {
     bout << "Unknown user.\r\n";
@@ -160,13 +209,13 @@ void AutoMessage() {
   do_automessage();
 }
 
-void Defaults(MenuInstanceData * pMenuData) {
+void Defaults(bool& need_menu_reload) {
   if (GuestCheck()) {
     write_inst(INST_LOC_DEFAULTS, 0, INST_FLAGS_NONE);
     if (printfile(DEFAULTS_NOEXT)) {
       pausescr();
     }
-    defaults(pMenuData);
+    defaults(need_menu_reload);
   }
 }
 
@@ -199,8 +248,8 @@ void SystemInfo() {
 }
 
 void JumpSubConf() {
-  if (okconf(session()->user())) {
-    jump_conf(CONF_SUBS);
+  if (okconf(a()->user())) {
+    jump_conf(ConferenceType::CONF_SUBS);
   }
 }
 
@@ -212,18 +261,15 @@ void KillEMail() {
 }
 
 void LastCallers() {
-  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  if (pStatus->GetNumCallsToday() > 0) {
-    if (application()->HasConfigFlag(OP_FLAGS_SHOW_CITY_ST) &&
-        (syscfg.sysconfig & sysconfig_extended_info)) {
-      bout << "|#2Number Name/Handle               Time  Date  City            ST Cty Modem    ##\r\n";
-    } else {
-      bout << "|#2Number Name/Handle               Language   Time  Date  Speed                ##\r\n";
-    }
-    unsigned char i = okansi() ? 205 : '=';
-    bout << "|#7" << string(79, i) << wwiv::endl;
+  if (a()->HasConfigFlag(OP_FLAGS_SHOW_CITY_ST) &&
+      (a()->config()->sysconfig_flags() & sysconfig_extended_info)) {
+    bout << "|#2Number Name/Handle               Time  Date  City            ST Cty Modem    ##\r\n";
+  } else {
+    bout << "|#2Number Name/Handle               Language   Time  Date  Speed                ##\r\n";
   }
-  printfile(USER_LOG);
+  char filler_char = okansi() ? '\xCD' : '=';
+  bout << "|#7" << string(79, filler_char) << wwiv::endl;
+  printfile(LASTON_TXT);
 }
 
 void ReadEMail() {
@@ -231,7 +277,7 @@ void ReadEMail() {
 }
 
 void NewMessageScan() {
-  if (okconf(session()->user())) {
+  if (okconf(a()->user())) {
     bout.nl();
     bout << "|#5New message scan in all conferences? ";
     if (noyes()) {
@@ -240,35 +286,31 @@ void NewMessageScan() {
     }
   }
   write_inst(INST_LOC_SUBS, 65535, INST_FLAGS_NONE);
-  express = false;
-  expressabort = false;
-  newline = false;
-  preload_subs();
+  bout.newline = false;
   nscan();
-  newline = true;
+  bout.newline = true;
 }
 
 void GoodBye() {
-  char szFileName[ MAX_PATH ];
   int cycle;
   int ch;
 
-  if (session()->numbatchdl != 0) {
+  if (a()->batch().numbatchdl() != 0) {
     bout.nl();
     bout << "|#2Download files in your batch queue (|#1Y/n|#2)? ";
     if (noyes()) {
       batchdl(1);
     }
   }
-  sprintf(szFileName, "%s%s", session()->language_dir.c_str(), LOGOFF_MAT);
-  if (!File::Exists(szFileName)) {
-    sprintf(szFileName, "%s%s", syscfg.gfilesdir, LOGOFF_MAT);
+  auto filename = FilePath(a()->language_dir, LOGOFF_MAT);
+  if (!File::Exists(filename)) {
+    filename = FilePath(a()->config()->gfilesdir(), LOGOFF_MAT);
   }
-  if (File::Exists(szFileName)) {
+  if (File::Exists(filename)) {
     cycle = 0;
     do {
       bout.cls();
-      printfile(szFileName);
+      printfile(filename);
       ch = onek("QFTO", true);
       switch (ch) {
       case 'Q':
@@ -277,7 +319,7 @@ void GoodBye() {
       case 'F':
         write_inst(INST_LOC_FEEDBACK, 0, INST_FLAGS_ONLINE);
         feedback(false);
-        application()->UpdateTopScreen();
+        a()->UpdateTopScreen();
         break;
       case 'T':
         write_inst(INST_LOC_BANK, 0, INST_FLAGS_ONLINE);
@@ -287,18 +329,20 @@ void GoodBye() {
         cycle = 1;
         write_inst(INST_LOC_LOGOFF, 0, INST_FLAGS_NONE);
         bout.cls();
-        bout <<  "Time on   = " << ctim(timer() - timeon) << wwiv::endl;
+        auto used_this_session = (std::chrono::system_clock::now() - a()->system_logon_time());
+        auto secs_used = std::chrono::duration_cast<std::chrono::seconds>(used_this_session);
+        bout <<  "Time on   = " << ctim(static_cast<long>(secs_used.count())) << wwiv::endl;
         {
           TempDisablePause disable_pause;
           printfile(LOGOFF_NOEXT);
         }
-        session()->user()->SetLastSubNum(session()->GetCurrentMessageArea());
-        session()->user()->SetLastDirNum(session()->GetCurrentFileArea());
-        if (okconf(session()->user())) {
-          session()->user()->SetLastSubConf(session()->GetCurrentConferenceMessageArea());
-          session()->user()->SetLastDirConf(session()->GetCurrentConferenceFileArea());
+        a()->user()->SetLastSubNum(a()->current_user_sub_num());
+        a()->user()->SetLastDirNum(a()->current_user_dir_num());
+        if (okconf(a()->user())) {
+          a()->user()->SetLastSubConf(a()->GetCurrentConferenceMessageArea());
+          a()->user()->SetLastDirConf(a()->GetCurrentConferenceFileArea());
         }
-        hangup = true;
+        Hangup();
         break;
       }
     } while (cycle == 0);
@@ -308,52 +352,50 @@ void GoodBye() {
     if (yesno()) {
       write_inst(INST_LOC_LOGOFF, 0, INST_FLAGS_NONE);
       bout.cls();
-      bout << "Time on   = " << ctim(timer() - timeon) << wwiv::endl;
+      auto used_this_session = (std::chrono::system_clock::now() - a()->system_logon_time());
+      auto sec_used = static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(used_this_session).count());
+      bout << "Time on   = " << ctim(sec_used) << wwiv::endl;
       {
         TempDisablePause disable_pause;
         printfile(LOGOFF_NOEXT);
       }
-      session()->user()->SetLastSubNum(session()->GetCurrentMessageArea());
-      session()->user()->SetLastDirNum(session()->GetCurrentFileArea());
-      if (okconf(session()->user())) {
-        session()->user()->SetLastSubConf(session()->GetCurrentConferenceMessageArea());
-        session()->user()->SetLastDirConf(session()->GetCurrentConferenceFileArea());
+      a()->user()->SetLastSubNum(a()->current_user_sub_num());
+      a()->user()->SetLastDirNum(a()->current_user_dir_num());
+      if (okconf(a()->user())) {
+        a()->user()->SetLastSubConf(a()->GetCurrentConferenceMessageArea());
+        a()->user()->SetLastDirConf(a()->GetCurrentConferenceFileArea());
       }
-      hangup = true;
+      Hangup();
     }
   }
 }
 
 void WWIV_PostMessage() {
-  irt[0] = 0;
-  irt_name[0] = 0;
-  grab_quotes(nullptr, nullptr);
-  if (usub[0].subnum != -1) {
-    post();
+  a()->context().clear_irt();
+  clear_quotes();
+  if (a()->usub[0].subnum != -1) {
+    post(PostData());
   }
 }
 
 void ScanSub() {
-  if (usub[0].subnum != -1) {
-    write_inst(INST_LOC_SUBS, usub[session()->GetCurrentMessageArea()].subnum, INST_FLAGS_NONE);
-    int i = 0;
-    express = expressabort = false;
-    qscan(session()->GetCurrentMessageArea(), &i);
+  if (a()->usub[0].subnum != -1) {
+    write_inst(INST_LOC_SUBS, a()->current_user_sub().subnum, INST_FLAGS_NONE);
+    bool nextsub = false;
+    qscan(a()->current_user_sub_num(), nextsub);
   }
 }
 
 void RemovePost() {
-  if (usub[0].subnum != -1) {
-    write_inst(INST_LOC_SUBS, usub[session()->GetCurrentMessageArea()].subnum, INST_FLAGS_NONE);
+  if (a()->usub[0].subnum != -1) {
+    write_inst(INST_LOC_SUBS, a()->current_user_sub().subnum, INST_FLAGS_NONE);
     remove_post();
   }
 }
 
 void TitleScan() {
-  if (usub[0].subnum != -1) {
-    write_inst(INST_LOC_SUBS, usub[session()->GetCurrentMessageArea()].subnum, INST_FLAGS_NONE);
-    express = false;
-    expressabort = false;
+  if (a()->usub[0].subnum != -1) {
+    write_inst(INST_LOC_SUBS, a()->current_user_sub().subnum, INST_FLAGS_NONE);
     ScanMessageTitles();
   }
 }
@@ -370,37 +412,37 @@ void Vote() {
 }
 
 void ToggleExpert() {
-  session()->user()->ToggleStatusFlag(WUser::expert);
-}
-
-void ExpressScan() {
-  express = true;
-  expressabort = false;
-  TempDisablePause disable_pause;
-  newline = false;
-  preload_subs();
-  nscan();
-  newline = true;
-  express = false;
-  expressabort = false;
+  a()->user()->ToggleStatusFlag(User::expert);
 }
 
 void WWIVVersion() {
   bout.cls();
   bout << "|#9WWIV Bulletin Board System " << wwiv_version << beta_version << wwiv::endl;
-  bout << "|#9Copyright (C) 1998-2015, WWIV Software Services.\r\n";
+  bout << "|#9Copyright (C) 1998-2018, WWIV Software Services.\r\n";
   bout << "|#9All Rights Reserved.\r\n\r\n";
-  bout << "|#9Licensed under the Apache License.  " << wwiv::endl;
+  bout << "|#9Licensed under the Apache License, Version 2.0." << wwiv::endl;
   bout << "|#9Please see |#1http://www.wwivbbs.org/ |#9for more information"
        << wwiv::endl << wwiv::endl;
   bout << "|#9Compile Time  : |#2" << wwiv_date << wwiv::endl;
-  bout << "|#9SysOp Name:   : |#2" << syscfg.sysopname << wwiv::endl;
+  bout << "|#9SysOp Name    : |#2" << a()->config()->sysop_name() << wwiv::endl;
+  bout << "|#9OS            : |#2" << wwiv::os::os_version_string() << wwiv::endl;
+  bout << "|#9Instance      : |#2" << a()->instance_number() << wwiv::endl;
+
+  if (!a()->net_networks.empty()) {
+    auto status = a()->status_manager()->GetStatus();
+    a()->status_manager()->RefreshStatusCache();
+    //bout << wwiv::endl;
+    bout << "|#9Networks      : |#2" << "net" << status->GetNetworkVersion() << wwiv::endl;
+    for (const auto& n : a()->net_networks) {
+      if (!n.sysnum) {
+        continue;
+      }
+      bout << "|#9" << std::setw(14) << std::left << n.name << ":|#2 @" << n.sysnum << wwiv::endl;
+    }
+  }
+
   bout.nl(3);
   pausescr();
-}
-
-void InstanceEdit() {
-  instance_edit();
 }
 
 void JumpEdit() {
@@ -410,13 +452,13 @@ void JumpEdit() {
 
 void BoardEdit() {
   write_inst(INST_LOC_BOARDEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Board Edit");
+  sysoplog() << "@ Ran Board Edit";
   boardedit();
 }
 
 void ChainEdit() {
   write_inst(INST_LOC_CHAINEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Chain Edit");
+  sysoplog() << "@ Ran Chain Edit";
   chainedit();
 }
 
@@ -427,11 +469,11 @@ void ToggleChat() {
   bool bNewAvail = sysop2();
   if (bOldAvail != bNewAvail) {
     bout << ((bNewAvail) ? "|#5Sysop now available\r\n" : "|#3Sysop now unavailable\r\n");
-    sysoplog("@ Changed sysop available status");
+    sysoplog() << "@ Changed sysop available status";
   } else {
     bout << "|#6Unable to toggle Sysop availability (hours restriction)\r\n";
   }
-  application()->UpdateTopScreen();
+  a()->UpdateTopScreen();
 }
 
 void ChangeUser() {
@@ -439,41 +481,31 @@ void ChangeUser() {
   chuser();
 }
 
-void CallOut() {
-  force_callout(2);
-}
-
-void Debug() {
-  int new_level = (File::GetDebugLevel() + 1) % 5;
-  File::SetDebugLevel(new_level);
-  bout << "|#5New Debug Level: " << new_level << wwiv::endl;
-}
-
 void DirEdit() {
   write_inst(INST_LOC_DIREDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Directory Edit");
+  sysoplog() << "@ Ran Directory Edit";
   dlboardedit();
 }
 
 void EventEdit() {
   write_inst(INST_LOC_EVENTEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("- Ran Event Editor");
+  sysoplog() << "- Ran Event Editor";
   eventedit();
 }
 
 void LoadTextFile() {
   bout.nl();
   bout << "|#9Enter Filename: ";
-  string fileName = Input1("", 50, true, InputMode::FULL_PATH_NAME);
+  auto fileName = input_path("", 50);
   if (!fileName.empty()) {
     bout.nl();
     bout << "|#5Allow editing? ";
     if (yesno()) {
       bout.nl();
-      LoadFileIntoWorkspace(fileName.c_str(), false);
+      LoadFileIntoWorkspace(fileName, false);
     } else {
       bout.nl();
-      LoadFileIntoWorkspace(fileName.c_str(), true);
+      LoadFileIntoWorkspace(fileName, true);
     }
   }
 }
@@ -482,27 +514,22 @@ void EditText() {
   write_inst(INST_LOC_TEDIT, 0, INST_FLAGS_NONE);
   bout.nl();
   bout << "|#7Enter Filespec: ";
-  string fileName;
-  input(&fileName, 50);
-  if (!fileName.empty()) {
-    external_text_edit(fileName.c_str(), "", 500, ".", MSGED_FLAG_NO_TAGLINE);
+  auto fn = input_path(50);
+  if (!fn.empty()) {
+    external_text_edit(fn, "", 500, MSGED_FLAG_NO_TAGLINE);
   }
 }
 
 void EditBulletins() {
   write_inst(INST_LOC_GFILEEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Gfile Edit");
+  sysoplog() << "@ Ran Gfile Edit";
   gfileedit();
 }
 
 void ReadAllMail() {
   write_inst(INST_LOC_MAILR, 0, INST_FLAGS_NONE);
-  sysoplog("@ Read mail");
+  sysoplog() << "@ Read mail";
   mailr();
-}
-
-void RebootComputer() {
-  // Does nothing.
 }
 
 void ReloadMenus() {
@@ -510,45 +537,31 @@ void ReloadMenus() {
   read_new_stuff();
 }
 
-void ResetFiles() {
-  write_inst(INST_LOC_RESETF, 0, INST_FLAGS_NONE);
-  reset_files();
-}
-
 void ResetQscan() {
   bout << "|#5Reset all QScan/NScan pointers (For All Users)? ";
   if (yesno()) {
     write_inst(INST_LOC_RESETQSCAN, 0, INST_FLAGS_NONE);
-    for (int i = 0; i <= application()->users()->GetNumberOfUserRecords(); i++) {
-      read_qscn(i, qsc, true);
-      memset(qsc_p, 0, syscfg.qscn_len - 4 * (1 + ((session()->GetMaxNumberFileAreas() + 31) / 32) + ((
-          session()->GetMaxNumberMessageAreas() + 31) / 32)));
-      write_qscn(i, qsc, true);
+    for (int i = 0; i <= a()->users()->num_user_records(); i++) {
+      read_qscn(i, a()->context().qsc, true);
+      memset(a()->context().qsc_p, 0,
+             a()->config()->qscn_len() - 4 * (1 + ((a()->config()->max_dirs() + 31) / 32) +
+                                              ((a()->config()->max_subs() + 31) / 32)));
+      write_qscn(i, a()->context().qsc, true);
     }
-    read_qscn(1, qsc, false);
+    read_qscn(1, a()->context().qsc, false);
     close_qscn();
   }
 }
 
 void MemoryStatus() {
-  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
+  auto status = a()->status_manager()->GetStatus();
   bout.nl();
-  bout << "Qscanptr        : " << pStatus->GetQScanPointer() << wwiv::endl;
-}
-
-void PackMessages() {
-  bout.nl();
-  bout << "|#5Pack all subs? ";
-  if (yesno()) {
-    pack_all_subs();
-  } else {
-    pack_sub(usub[session()->GetCurrentMessageArea()].subnum);
-  }
+  bout << "Qscanptr        : " << status->GetQScanPointer() << wwiv::endl;
 }
 
 void InitVotes() {
   write_inst(INST_LOC_VOTE, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Ivotes");
+  sysoplog() << "@ Ran Ivotes";
   ivotes();
 }
 
@@ -558,7 +571,7 @@ void ReadLog() {
 }
 
 void ReadNetLog() {
-  print_local_file("NET.LOG");
+  print_local_file("net.log");
 }
 
 void PrintPending() {
@@ -571,14 +584,8 @@ void PrintStatus() {
 
 void TextEdit() {
   write_inst(INST_LOC_TEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran Text Edit");
+  sysoplog() << "@ Ran Text Edit";
   text_edit();
-}
-
-void UserEdit() {
-  write_inst(INST_LOC_UEDIT, 0, INST_FLAGS_NONE);
-  sysoplog("@ Ran User Edit");
-  uedit(session()->usernum, UEDIT_NONE);
 }
 
 void VotePrint() {
@@ -586,9 +593,9 @@ void VotePrint() {
   voteprint();
 }
 
-void YesturdaysLog() {
-  std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-  print_local_file(pStatus->GetLogFileName());
+void YesterdaysLog() {
+  auto status = a()->status_manager()->GetStatus();
+  print_local_file(status->GetLogFileName(1));
 }
 
 void ZLog() {
@@ -598,7 +605,7 @@ void ZLog() {
 void ViewNetDataLog() {
   bool done = false;
 
-  while (!done && !hangup) {
+  while (!done && !a()->hangup_) {
     bout.nl();
     bout << "|#9Which NETDAT log (0-2,Q)? ";
     char ch = onek("Q012");
@@ -623,10 +630,6 @@ void UploadPost() {
   upload_post();
 }
 
-void NetListing() {
-  print_net_listing(false);
-}
-
 void WhoIsOnline() {
   multi_instance();
   bout.nl();
@@ -636,17 +639,14 @@ void WhoIsOnline() {
 void NewMsgsAllConfs() {
   bool ac = false;
 
-  write_inst(INST_LOC_SUBS, usub[session()->GetCurrentMessageArea()].subnum, INST_FLAGS_NONE);
-  express = false;
-  expressabort = false;
-  newline = false;
-  if (uconfsub[1].confnum != -1 && okconf(session()->user())) {
+  write_inst(INST_LOC_SUBS, a()->current_user_sub().subnum, INST_FLAGS_NONE);
+  bout.newline = false;
+  if (a()->uconfsub[1].confnum != -1 && okconf(a()->user())) {
     ac = true;
     tmp_disable_conf(true);
   }
-  preload_subs();
   nscan();
-  newline = true;
+  bout.newline = true;
   if (ac == true) {
     tmp_disable_conf(false);
   }
@@ -661,64 +661,20 @@ void InternetEmail() {
 }
 
 void NewMsgScanFromHere() {
-  newline = false;
-  preload_subs();
-  nscan(session()->GetCurrentMessageArea());
-  newline = true;
+  bout.newline = false;
+  nscan(a()->current_user_sub_num());
+  bout.newline = true;
 }
 
 void ValidateScan() {
-  newline = false;
+  bout.newline = false;
   valscan();
-  newline = true;
+  bout.newline = true;
 }
 
 void ChatRoom() {
   write_inst(INST_LOC_CHATROOM, 0, INST_FLAGS_NONE);
-  if (File::Exists("WWIVCHAT.EXE")) {
-    std::ostringstream cmdline;
-    cmdline << "WWIVCHAT.EXE " << create_chain_file();
-    ExecuteExternalProgram(cmdline.str(), application()->GetSpawnOptions(SPAWNOPT_CHAT));
-  } else {
-    chat_room();
-  }
-}
-
-void DownloadPosts() {
-  if (application()->HasConfigFlag(OP_FLAGS_SLASH_SZ)) {
-    bout << "|#5This could take quite a while.  Are you sure? ";
-    if (yesno()) {
-      bout << "Please wait...\r\n";
-      session()->capture()->set_x_only(true, "posts.txt", false);
-      bool ac = false;
-      if (uconfsub[1].confnum != -1 && okconf(session()->user())) {
-        ac = true;
-        tmp_disable_conf(true);
-      }
-      preload_subs();
-      nscan();
-      if (ac) {
-        tmp_disable_conf(false);
-      }
-      session()->capture()->set_x_only(false, nullptr, false);
-      add_arc("offline", "posts.txt", 0);
-      download_temp_arc("offline", false);
-    }
-  }
-}
-
-void DownloadFileList() {
-  if (application()->HasConfigFlag(OP_FLAGS_SLASH_SZ)) {
-    bout << "|#5This could take quite a while.  Are you sure? ";
-    if (yesno()) {
-      bout << "Please wait...\r\n";
-      session()->capture()->set_x_only(1, "files.txt", true);
-      searchall();
-      session()->capture()->set_x_only(false, nullptr, false);
-      add_arc("temp", "files.txt", 0);
-      download_temp_arc("temp", false);
-    }
-  }
+  chat_room();
 }
 
 void ClearQScan() {
@@ -730,56 +686,49 @@ void ClearQScan() {
   case RETURN:
     break;
   case 'A': {
-    std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
-    for (int i = 0; i < session()->GetMaxNumberMessageAreas(); i++) {
-      qsc_p[i] = pStatus->GetQScanPointer() - 1L;
+    auto status = a()->status_manager()->GetStatus();
+    for (int i = 0; i < a()->config()->max_subs(); i++) {
+      a()->context().qsc_p[i] = status->GetQScanPointer() - 1L;
     }
     bout.nl();
     bout << "Q-Scan pointers cleared.\r\n";
   }
   break;
   case 'C':
-    std::unique_ptr<WStatus> pStatus(application()->GetStatusManager()->GetStatus());
+    auto status = a()->status_manager()->GetStatus();
     bout.nl();
-    qsc_p[usub[session()->GetCurrentMessageArea()].subnum] = pStatus->GetQScanPointer() - 1L;
-    bout << "Messages on " << subboards[usub[session()->GetCurrentMessageArea()].subnum].name <<
-                       " marked as read.\r\n";
+    a()->context().qsc_p[a()->current_user_sub().subnum] = status->GetQScanPointer() - 1L;
+    bout << "Messages on " << a()->subs().sub(a()->current_user_sub().subnum).name
+         << " marked as read.\r\n";
     break;
   }
 }
 
 void FastGoodBye() {
-  if (session()->numbatchdl != 0) {
+  if (a()->batch().numbatchdl() != 0) {
     bout.nl();
     bout << "|#2Download files in your batch queue (|#1Y/n|#2)? ";
     if (noyes()) {
       batchdl(1);
-    } else {
-      hangup = true;
     }
-  } else {
-    hangup = true;
   }
-  session()->user()->SetLastSubNum(session()->GetCurrentMessageArea());
-  session()->user()->SetLastDirNum(session()->GetCurrentFileArea());
-  if (okconf(session()->user())) {
-    session()->user()->SetLastSubConf(session()->GetCurrentConferenceMessageArea());
-    session()->user()->SetLastDirConf(session()->GetCurrentConferenceFileArea());
+  a()->user()->SetLastSubNum(a()->current_user_sub_num());
+  a()->user()->SetLastDirNum(a()->current_user_dir_num());
+  if (okconf(a()->user())) {
+    a()->user()->SetLastSubConf(a()->GetCurrentConferenceMessageArea());
+    a()->user()->SetLastDirConf(a()->GetCurrentConferenceFileArea());
   }
+  Hangup();
 }
 
 void NewFilesAllConfs() {
   bout.nl();
   int ac = 0;
-  if (uconfsub[1].confnum != -1 && okconf(session()->user())) {
+  if (a()->uconfsub[1].confnum != -1 && okconf(a()->user())) {
     ac = 1;
     tmp_disable_conf(true);
   }
-  g_num_listed = 0;
-  session()->tagging = 1;
-  session()->titled = 1;
   nscanall();
-  session()->tagging = 0;
   if (ac) {
     tmp_disable_conf(false);
   }
@@ -791,7 +740,7 @@ void ReadIDZ() {
   if (yesno()) {
     read_idz_all();
   } else {
-    read_idz(1, session()->GetCurrentFileArea());
+    read_idz(1, a()->current_user_dir_num());
   }
 }
 
@@ -802,15 +751,15 @@ void RemoveNotThere() {
 void UploadAllDirs() {
   bout.nl(2);
   bool ok = true;
-  for (int nDirNum = 0; nDirNum < session()->num_dirs && udir[nDirNum].subnum >= 0 && ok && !hangup; nDirNum++) {
-    bout << "|#9Now uploading files for: |#2" << directories[udir[nDirNum].subnum].name << wwiv::endl;
+  for (uint16_t nDirNum = 0; nDirNum < a()->directories.size() && a()->udir[nDirNum].subnum >= 0 && ok && !a()->hangup_; nDirNum++) {
+    bout << "|#9Now uploading files for: |#2" << a()->directories[a()->udir[nDirNum].subnum].name << wwiv::endl;
     ok = uploadall(nDirNum);
   }
 }
 
 
 void UploadCurDir() {
-  uploadall(session()->GetCurrentFileArea());
+  uploadall(a()->current_user_dir_num());
 }
 
 void RenameFiles() {
@@ -837,7 +786,7 @@ void SortDirs() {
   if (bSortAll) {
     sort_all(nType);
   } else {
-    sortdir(udir[session()->GetCurrentFileArea()].subnum, nType);
+    sortdir(a()->current_user_dir().subnum, nType);
   }
 }
 
@@ -850,7 +799,7 @@ void ReverseSort() {
   if (bSortAll) {
     sort_all(1);
   } else {
-    sortdir(udir[session()->GetCurrentFileArea()].subnum, 1);
+    sortdir(a()->current_user_dir().subnum, 1);
   }
 }
 
@@ -859,8 +808,6 @@ void AllowEdit() {
 }
 
 void UploadFilesBBS() {
-  char s2[81];
-
   bout.nl();
   bout << "|#21|#9) PCB, RBBS   - <filename> <size> <date> <description>\r\n";
   bout << "|#22|#9) QBBS format - <filename> <description>\r\n";
@@ -872,7 +819,7 @@ void UploadFilesBBS() {
     int nType = 0;
     bout << "|#9Enter Filename (wildcards allowed).\r\n|#7: ";
     bout.mpl(77);
-    inputl(s2, 80);
+    auto filespec = input_text(80);
     switch (ch) {
     case '1':
       nType = 2;
@@ -884,52 +831,52 @@ void UploadFilesBBS() {
       nType = 0;
       break;
     }
-    upload_files(s2, session()->GetCurrentFileArea(), nType);
+    upload_files(filespec.c_str(), a()->current_user_dir_num(), nType);
   }
 }
 
 void UpDirConf() {
-  if (okconf(session()->user())) {
-    if (session()->GetCurrentConferenceFileArea() < dirconfnum - 1
-        && uconfdir[session()->GetCurrentConferenceFileArea() + 1].confnum >= 0) {
-      session()->SetCurrentConferenceFileArea(session()->GetCurrentConferenceFileArea() + 1);
+  if (okconf(a()->user())) {
+    if (a()->GetCurrentConferenceFileArea() < a()->dirconfs.size() - 1
+        && a()->uconfdir[a()->GetCurrentConferenceFileArea() + 1].confnum >= 0) {
+      a()->SetCurrentConferenceFileArea(a()->GetCurrentConferenceFileArea() + 1);
     } else {
-      session()->SetCurrentConferenceFileArea(0);
+      a()->SetCurrentConferenceFileArea(0);
     }
-    setuconf(CONF_DIRS, session()->GetCurrentConferenceFileArea(), -1);
+    setuconf(ConferenceType::CONF_DIRS, a()->GetCurrentConferenceFileArea(), -1);
   }
 }
 
 void UpDir() {
-  if (session()->GetCurrentFileArea() < session()->num_dirs - 1
-      && udir[session()->GetCurrentFileArea() + 1].subnum >= 0) {
-    session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+  if (a()->current_user_dir_num() < size_int(a()->directories) - 1
+      && a()->udir[a()->current_user_dir_num() + 1].subnum >= 0) {
+    a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
   } else {
-    session()->SetCurrentFileArea(0);
+    a()->set_current_user_dir_num(0);
   }
 }
 
 void DownDirConf() {
-  if (okconf(session()->user())) {
-    if (session()->GetCurrentConferenceFileArea() > 0) {
-      session()->SetCurrentConferenceFileArea(session()->GetCurrentConferenceFileArea());
+  if (okconf(a()->user())) {
+    if (a()->GetCurrentConferenceFileArea() > 0) {
+      a()->SetCurrentConferenceFileArea(a()->GetCurrentConferenceFileArea());
     } else {
-      while (uconfdir[session()->GetCurrentConferenceFileArea() + 1].confnum >= 0
-             && session()->GetCurrentConferenceFileArea() < dirconfnum - 1) {
-        session()->SetCurrentConferenceFileArea(session()->GetCurrentConferenceFileArea() + 1);
+      while (a()->uconfdir[a()->GetCurrentConferenceFileArea() + 1].confnum >= 0 &&
+             a()->GetCurrentConferenceFileArea() < a()->dirconfs.size() - 1) {
+        a()->SetCurrentConferenceFileArea(a()->GetCurrentConferenceFileArea() + 1);
       }
     }
-    setuconf(CONF_DIRS, session()->GetCurrentConferenceFileArea(), -1);
+    setuconf(ConferenceType::CONF_DIRS, a()->GetCurrentConferenceFileArea(), -1);
   }
 }
 
 void DownDir() {
-  if (session()->GetCurrentFileArea() > 0) {
-    session()->SetCurrentFileArea(session()->GetCurrentFileArea() - 1);
+  if (a()->current_user_dir_num() > 0) {
+    a()->set_current_user_dir_num(a()->current_user_dir_num() - 1);
   } else {
-    while (udir[session()->GetCurrentFileArea() + 1].subnum >= 0 &&
-           session()->GetCurrentFileArea() < session()->num_dirs - 1) {
-      session()->SetCurrentFileArea(session()->GetCurrentFileArea() + 1);
+    while (a()->udir[a()->current_user_dir_num() + 1].subnum >= 0 &&
+           a()->current_user_dir_num() < size_int(a()->directories) - 1) {
+      a()->set_current_user_dir_num(a()->current_user_dir_num() + 1);
     }
   }
 }
@@ -939,8 +886,8 @@ void ListUsersDL() {
 }
 
 void PrintDSZLog() {
-  if (File::Exists(g_szDSZLogFileName)) {
-    print_local_file(g_szDSZLogFileName);
+  if (File::Exists(a()->dsz_logfile_name_)) {
+    print_local_file(a()->dsz_logfile_name_);
   }
 }
 
@@ -967,9 +914,7 @@ void TempExtract() {
 }
 
 void FindDescription() {
-  session()->tagging = 1;
   finddescription();
-  session()->tagging = 0;
 }
 
 void TemporaryStuff() {
@@ -977,46 +922,41 @@ void TemporaryStuff() {
 }
 
 void JumpDirConf() {
-  if (okconf(session()->user())) {
-    jump_conf(CONF_DIRS);
+  if (okconf(a()->user())) {
+    jump_conf(ConferenceType::CONF_DIRS);
   }
 }
 
 void ConfigFileList() {
-  if (ok_listplus()) {
+  if (okansi()) {
     config_file_list();
   }
 }
 
 void ListFiles() {
-  session()->tagging = 1;
   listfiles();
-  session()->tagging = 0;
 }
 
 void NewFileScan() {
-  if (application()->HasConfigFlag(OP_FLAGS_SETLDATE)) {
+  if (a()->HasConfigFlag(OP_FLAGS_SETLDATE)) {
     SetNewFileScanDate();
   }
   bool abort = false;
-  g_num_listed = 0;
-  session()->tagging = 1;
-  session()->titled = 1;
+  bool need_title = true;
   bout.nl();
   bout << "|#5Search all directories? ";
   if (yesno()) {
     nscanall();
   } else {
     bout.nl();
-    nscandir(session()->GetCurrentFileArea(), &abort);
-    if (g_num_listed) {
+    nscandir(a()->current_user_dir_num(), need_title, &abort);
+    if (!a()->filelist.empty()) {
       endlist(2);
     } else {
       bout.nl();
       bout << "|#2No new files found.\r\n";
     }
   }
-  session()->tagging = 0;
 }
 
 void RemoveFiles() {
@@ -1026,9 +966,7 @@ void RemoveFiles() {
 }
 
 void SearchAllFiles() {
-  session()->tagging = 1;
   searchall();
-  session()->tagging = 0;
 }
 
 void XferDefaults() {
@@ -1040,15 +978,15 @@ void XferDefaults() {
 void Upload() {
   play_sdf(UPLOAD_NOEXT, false);
   printfile(UPLOAD_NOEXT);
-  if (session()->user()->IsRestrictionValidate() || session()->user()->IsRestrictionUpload() ||
-      (syscfg.sysconfig & sysconfig_all_sysop)) {
-    if (syscfg.newuploads < session()->num_dirs) {
-      upload(static_cast<int>(syscfg.newuploads));
+  if (a()->user()->IsRestrictionValidate() || a()->user()->IsRestrictionUpload() ||
+      (a()->config()->sysconfig_flags() & sysconfig_all_sysop)) {
+    if (a()->config()->new_uploads_dir() < a()->directories.size()) {
+      upload(static_cast<int>(a()->config()->new_uploads_dir()));
     } else {
       upload(0);
     }
   } else {
-    upload(udir[session()->GetCurrentFileArea()].subnum);
+    upload(a()->current_user_dir().subnum);
   }
 }
 
@@ -1068,7 +1006,7 @@ void ReadAutoMessage() {
 }
 
 void GuestApply() {
-  if (guest_user) {
+  if (a()->context().guest_user()) {
     newuser();
   } else {
     bout << "You already have an account on here!\r\n\r\n";
@@ -1080,7 +1018,7 @@ void AttachFile() {
 }
 
 bool GuestCheck() {
-  if (guest_user) {
+  if (a()->context().guest_user()) {
     bout << "|#6This command is only for registered users.\r\n";
     return false;
   }
@@ -1088,17 +1026,17 @@ bool GuestCheck() {
 }
 
 void SetSubNumber(const char *pszSubKeys) {
-  for (int i = 0; (i < session()->num_subs) && (usub[i].subnum != -1); i++) {
-    if (wwiv::strings::IsEquals(usub[i].keys, pszSubKeys)) {
-      session()->SetCurrentMessageArea(i);
+  for (uint16_t i = 0; (i < a()->subs().subs().size()) && (a()->usub[i].subnum != -1); i++) {
+    if (wwiv::strings::IsEquals(a()->usub[i].keys, pszSubKeys)) {
+      a()->set_current_user_sub_num(i);
     }
   }
 }
 
 void SetDirNumber(const char *pszDirectoryKeys) {
-  for (int i = 0; i < session()->num_dirs; i++) {
-    if (wwiv::strings::IsEquals(udir[i].keys, pszDirectoryKeys)) {
-      session()->SetCurrentFileArea(i);
+  for (uint16_t i = 0; i < a()->directories.size(); i++) {
+    if (IsEquals(a()->udir[i].keys, pszDirectoryKeys)) {
+      a()->set_current_user_dir_num(i);
     }
   }
 }

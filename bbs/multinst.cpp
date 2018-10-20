@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,13 +19,18 @@
 #include <string>
 #include "bbs/multinst.h"
 
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+
+#include "bbs/bbsutl.h"
 #include "bbs/instmsg.h"
-#include "bbs/wconstants.h"
+#include "local_io/wconstants.h"
 
 #include "core/strings.h"
+#include "sdk/filenames.h"
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 // Local funciton prototypes
@@ -40,14 +45,14 @@ string GetInstanceActivityString(instancerec &ir) {
     case INST_LOC_EMAIL: return string("Sending Email");
     case INST_LOC_MAIN: return string("Main Menu");
     case INST_LOC_XFER:
-      if (so() && ir.subloc < session()->num_dirs) {
-        string temp = StringPrintf("Dir : %s", stripcolors(directories[ ir.subloc ].name));
+      if (so() && ir.subloc < a()->directories.size()) {
+        string temp = StringPrintf("Dir : %s", stripcolors(a()->directories[ ir.subloc ].name));
         return StrCat("Transfer Area", temp);
       }
       return string("Transfer Area");
     case INST_LOC_CHAINS:
-      if (ir.subloc > 0 && ir.subloc <= session()->GetNumberOfChains()) {
-        string temp = StringPrintf("Door: %s", stripcolors(chains[ ir.subloc - 1 ].description));
+      if (ir.subloc > 0 && ir.subloc <= a()->chains.size()) {
+        string temp = StringPrintf("Door: %s", stripcolors(a()->chains[ ir.subloc - 1 ].description));
         return StrCat("Chains", temp);
       }
       return string("Chains");
@@ -75,8 +80,9 @@ string GetInstanceActivityString(instancerec &ir) {
     case INST_LOC_BANK: return ("In TimeBank");
     case INST_LOC_AMSG: return ("AutoMessage");
     case INST_LOC_SUBS:
-      if (so() && ir.subloc < session()->num_subs) {
-        string temp = StringPrintf("(Sub: %s)", stripcolors(subboards[ ir.subloc ].name));
+      if (so() && ir.subloc < a()->subs().subs().size()) {
+        string temp = StringPrintf("(Sub: %s)",
+            stripcolors(a()->subs().sub(ir.subloc).name.c_str()));
         return StrCat("Reading Messages", temp);
       }
       return string("Reading Messages");
@@ -90,8 +96,9 @@ string GetInstanceActivityString(instancerec &ir) {
     case INST_LOC_FEEDBACK: return string("Leaving Feedback");
     case INST_LOC_KILLEMAIL: return string("Viewing Old Email");
     case INST_LOC_POST:
-      if (so() && ir.subloc < session()->num_subs) {
-        string temp = StringPrintf(" (Sub: %s)", stripcolors(subboards[ir.subloc].name));
+      if (so() && ir.subloc < a()->subs().subs().size()) {
+        string temp = StringPrintf(" (Sub: %s)",
+            stripcolors(a()->subs().sub(ir.subloc).name.c_str()));
         return StrCat("Posting a Message", temp);
       }
       return string("Posting a Message");
@@ -110,7 +117,7 @@ string GetInstanceActivityString(instancerec &ir) {
 }
 
 /*
- * Builds a string (in pszOutInstanceString) like:
+ * Returns a string (in out) like:
  *
  * Instance   1: Offline
  *     LastUser: Sysop #1
@@ -120,93 +127,79 @@ string GetInstanceActivityString(instancerec &ir) {
  * Instance  22: Network transmission
  *     CurrUser: Sysop #1
  */
-void make_inst_str(int nInstanceNum, std::string *out, int nInstanceFormat) {
-  const string s = StringPrintf("|#1Instance %-3d: |#2", nInstanceNum);
+std::string make_inst_str(int instance_num, int format) {
+  const auto s = StringPrintf("|#1Instance %-3d: |#2", instance_num);
 
-  instancerec ir;
-  get_inst_info(nInstanceNum, &ir);
+  instancerec ir{};
+  get_inst_info(instance_num, &ir);
 
-  const string activity_string = GetInstanceActivityString(ir);
+  const auto activity_string = GetInstanceActivityString(ir);
 
-  switch (nInstanceFormat) {
+  switch (format) {
   case INST_FORMAT_WFC:
-    out->assign(activity_string); // WFC addition
-    break;
+    return activity_string;
   case INST_FORMAT_OLD:
     // Not used anymore.
-    out->assign(s);
-    break;
+    return s;
   case INST_FORMAT_LIST: {
     std::string userName;
-    if (ir.user < syscfg.maxusers && ir.user > 0) {
-      WUser user;
-      application()->users()->ReadUser(&user, ir.user);
+    if (ir.user < a()->config()->max_users() && ir.user > 0) {
+      User user;
+      a()->users()->readuser(&user, ir.user);
       if (ir.flags & INST_FLAGS_ONLINE) {
-        userName = user.GetUserNameAndNumber(ir.user);
+        userName = a()->names()->UserName(ir.user);
       } else {
-        userName = "Last: ";
-        userName += user.GetUserNameAndNumber(ir.user);
+        userName = StrCat("Last: ", a()->names()->UserName(ir.user));
       }
     } else {
       userName = "(Nobody)";
     }
-    out->assign(StringPrintf("|#5%-4d |#2%-35.35s |#1%-37.37s", nInstanceNum, userName.c_str(), activity_string.c_str()));
+    return StringPrintf("|#5%-4d |#2%-35.35s |#1%-37.37s", instance_num, userName.c_str(), activity_string.c_str());
   }
-  break;
-  default:
-    out->assign(StringPrintf("** INVALID INSTANCE FORMAT PASSED [%d] **", nInstanceFormat));
-    break;
   }
+  return StringPrintf("** INVALID INSTANCE FORMAT PASSED [%d] **", format);
 }
 
 void multi_instance() {
   bout.nl();
-  int nNumInstances = num_instances();
-  if (nNumInstances < 1) {
+  auto num = num_instances();
+  if (num < 1) {
     bout << "|#6Couldn't find instance data file.\r\n";
     return;
   }
 
   bout.bprintf("|#5Node |#1%-35.35s |#2%-37.37s\r\n", "User Name", "Activity");
-  char s1[81], s2[81], s3[81];
-  strcpy(s1, charstr(4, '='));
-  strcpy(s2, charstr(35, '='));
-  strcpy(s3, charstr(37, '='));
-  bout.bprintf("|#7%-4.4s %-35.35s %-37.37s\r\n", s1, s2, s3);
+  bout << "==== " << string(35, '=') << " " << string(37, '=') << "\r\n";
 
-  for (int nInstance = 1; nInstance <= nNumInstances; nInstance++) {
-    string activity;
-    make_inst_str(nInstance, &activity, INST_FORMAT_LIST);
-    bout << activity;
-    bout.nl();
+  for (int inst = 1; inst <= num; inst++) {
+    bout << make_inst_str(inst, INST_FORMAT_LIST) << "\r\n";
   }
 }
 
 int inst_ok(int loc, int subloc) {
-  instancerec instance_temp;
-
   if (loc == INST_LOC_FSED) {
     return 0;
   }
 
-  int nInstNum = 0;
-  File instFile(syscfg.datadir, INSTANCE_DAT);
-  if (!instFile.Open(File::modeReadOnly | File::modeBinary)) {
+  int num = 0;
+  File f(FilePath(a()->config()->datadir(), INSTANCE_DAT));
+  if (!f.Open(File::modeReadOnly | File::modeBinary)) {
     return 0;
   }
-  int nNumInstances = static_cast<int>(instFile.GetLength() / sizeof(instancerec));
-  instFile.Close();
-  for (int nInstance = 1; nInstance < nNumInstances; nInstance++) {
-    if (instFile.Open(File::modeReadOnly | File::modeBinary)) {
-      instFile.Seek(nInstance * sizeof(instancerec), File::seekBegin);
-      instFile.Read(&instance_temp, sizeof(instancerec));
-      instFile.Close();
-      if (instance_temp.loc == loc &&
-          instance_temp.subloc == subloc &&
-          instance_temp.number != application()->GetInstanceNumber()) {
-        nInstNum = instance_temp.number;
+  auto num_instances = static_cast<int>(f.length() / sizeof(instancerec));
+  f.Close();
+  for (int i = 1; i < num_instances; i++) {
+    if (f.Open(File::modeReadOnly | File::modeBinary)) {
+      f.Seek(i * sizeof(instancerec), File::Whence::begin);
+      instancerec in{};
+      f.Read(&in, sizeof(instancerec));
+      f.Close();
+      if (in.loc == loc &&
+          in.subloc == subloc &&
+          in.number != a()->instance_number()) {
+        num = in.number;
       }
     }
   }
-  return nInstNum;
+  return num;
 }

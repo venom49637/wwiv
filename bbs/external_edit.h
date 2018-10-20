@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*              Copyright (C)2014-2015 WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*              Copyright (C)2014-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,13 +19,35 @@
 #ifndef __INCLUDED_EXTERNAL_EDIT_H__
 #define __INCLUDED_EXTERNAL_EDIT_H__
 
+#include "bbs/message_editor_data.h"
 #include <string>
+
 #include "sdk/vardec.h"
 
-bool ExternalMessageEditor(int maxli, int *setanon, std::string* pszTitle, const std::string& destination, int flags, const std::string& aux);
+class ExternalMessageEditor {
+public:
+  ExternalMessageEditor(const editorrec& editor, wwiv::bbs::MessageEditorData& data, int maxli, int* setanon,
+                        const std::string& temp_directory)
+      : editor_(editor), data_(data), maxli_(maxli), setanon_(setanon),
+        temp_directory_(temp_directory){};
+  virtual ~ExternalMessageEditor() = default;
 
-bool external_text_edit(const std::string& edit_filename, const std::string& new_directory, int numlines,
-                        const std::string& destination, int flags);
+  virtual bool Run();
+  virtual void CleanupControlFiles() = 0;
+  virtual bool Before() = 0;
+  virtual bool After() = 0;
+  virtual const std::string editor_filename() const = 0;
 
-#endif  // __INCLUDED_EXTERNAL_EDIT_H__
+protected:
+  const editorrec editor_;
+  wwiv::bbs::MessageEditorData& data_;
+  const int maxli_;
+  int* setanon_;
+  const std::string temp_directory_;
+};
+bool DoExternalMessageEditor(wwiv::bbs::MessageEditorData& data, int maxli, int* setanon);
 
+bool external_text_edit(const std::string& edit_filename, const std::string& new_directory,
+                        int numlines, int flags);
+
+#endif // __INCLUDED_EXTERNAL_EDIT_H__

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015,WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -32,16 +32,20 @@
 #include <unistd.h>
 #include <sys/param.h>
 #include <sys/mount.h>
-
-#ifdef __linux
 #include <sys/statfs.h>
-#include <sys/vfs.h> 
-#endif  // __linux
+#include <sys/vfs.h>
 
-#include "core/wfndfile.h"
+#ifdef __linux__
+#include <sys/statvfs.h>
+#endif  // __linux__
+
 #include "core/wwivassert.h"
 
 using std::string;
+
+namespace wwiv {
+namespace core {
+
 
 /////////////////////////////////////////////////////////////////////////////
 // Constants
@@ -59,80 +63,38 @@ const char File::pathSeparatorString[] = "/";
 const char File::separatorChar     = ':';
 
 
-bool File::IsDirectory() const {
-  struct stat statbuf;
-  stat(full_path_name_.c_str(), &statbuf);
-  return S_ISDIR(statbuf.st_mode);
-}
-
-long File::GetLength() {
-  // stat/fstat is the 32 bit version on WIN32
-  struct stat fileinfo;
-
-  if (IsOpen()) {
-    // File is open, use fstat
-    if (fstat(handle_, &fileinfo) != 0) {
-      return -1;
-    }
-  }
-  else {
-    // stat works on filenames, not filehandles.
-    if (stat(full_path_name_.c_str(), &fileinfo) != 0) {
-      return -1;
-    }
-  }
-  return fileinfo.st_size;
-}
-
-time_t File::last_write_time() {
-  bool bOpenedHere = false;
-  if (!this->IsOpen()) {
-    bOpenedHere = true;
-    Open();
-  }
-  WWIV_ASSERT(File::IsFileHandleValid(handle_));
-
-  struct stat buf;
-  time_t nFileTime = (stat(full_path_name_.c_str(), &buf) == -1) ? 0 : buf.st_mtime;
-
-  if (bOpenedHere) {
-    Close();
-  }
-  return nFileTime;
-}
-
 /////////////////////////////////////////////////////////////////////////////
 // Static functions
 
-bool File::Copy(const std::string& sourceFileName, const std::string& destFileName) {
-  if (sourceFileName != destFileName && File::Exists(sourceFileName) && !File::Exists(destFileName)) {
-    char *pBuffer = static_cast<char *>(malloc(16400));
-    if (pBuffer == nullptr) {
+bool File::Copy(const std::string& source_filename, const std::string& dest_filename) {
+  if (source_filename != dest_filename && File::Exists(source_filename) && !File::Exists(dest_filename)) {
+    auto *buffer = static_cast<char *>(malloc(16400));
+    if (buffer == nullptr) {
       return false;
     }
-    int hSourceFile = open(sourceFileName.c_str(), O_RDONLY | O_BINARY);
-    if (!hSourceFile) {
-      free(pBuffer);
-      return false;
-    }
-
-    int hDestFile = open(destFileName.c_str(), O_RDWR | O_BINARY | O_CREAT | O_TRUNC, S_IREAD | S_IWRITE);
-    if (!hDestFile) {
-      free(pBuffer);
-      close(hSourceFile);
+    int src_fd = open(source_filename.c_str(), O_RDONLY);
+    if (!src_fd) {
+      free(buffer);
       return false;
     }
 
-    int i = read(hSourceFile, pBuffer, 16384);
+    int dest_fd = open(dest_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IREAD | S_IWRITE);
+    if (!dest_fd) {
+      free(buffer);
+      close(src_fd);
+      return false;
+    }
+
+    auto i = read(src_fd, buffer, 16384);
 
     while (i > 0) {
-      write(hDestFile, pBuffer, i);
-      i = read(hSourceFile, pBuffer, 16384);
+      write(dest_fd, buffer, static_cast<size_t>(i));
+      i = read(src_fd, buffer, 16384);
     }
 
-    hSourceFile = close(hSourceFile);
-    hDestFile = close(hDestFile);
-    free(pBuffer);
+    close(src_fd);
+    close(dest_fd);
+    free(buffer);
   }
 
   // I'm not sure about the logic here since you would think we should return true
@@ -140,30 +102,32 @@ bool File::Copy(const std::string& sourceFileName, const std::string& destFileNa
   return true;
 }
 
-bool File::Move(const std::string& sourceFileName, const std::string& destFileName) {
-  //TODO: Atani needs to see if Rushfan buggered up this implementation
-  if (Copy(sourceFileName, destFileName)) {
-    return Remove(sourceFileName);
+bool File::Move(const std::string& source_filename, const std::string& dest_filename) {
+  if (Copy(source_filename, dest_filename)) {
+    return Remove(source_filename);
   }
   return false;
 }
 
-bool File::RealPath(const std::string& path, std::string* resolved) {
-  char* result = realpath(path.c_str(), NULL);
-  if (resolved == NULL) {
-    resolved->assign(path);
+bool File::canonical(const std::string& path, std::string* resolved) {
+  if (resolved == nullptr) {
     return false;
   }
 
+  auto result = ::realpath(path.c_str(), nullptr);
   resolved->assign(result);
   free(result);
   return true;
 }
-long File::GetFreeSpaceForPath(const string& path) {
-  struct statfs fs;
-  if (statfs(path.c_str(), &fs)) {
-    perror("freek1()");
+
+long File::freespace_for_path(const string& path) {
+  struct statvfs fs{};
+  if (statvfs(path.c_str(), &fs)) {
+    perror("statfs()");
     return 0;
   }
-  return ((long) fs.f_bsize * (double) fs.f_bavail) / 1024;
+  return static_cast<long>((long) fs.f_frsize * (double) fs.f_bavail / 1024);
+}
+
+}
 }

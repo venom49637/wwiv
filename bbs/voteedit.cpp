@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,27 +18,35 @@
 /**************************************************************************/
 #include "bbs/voteedit.h"
 
+#include "bbs/bbsutl.h"
 #include "bbs/input.h"
-#include "bbs/wstatus.h"
-#include "bbs/wwiv.h"
+#include "sdk/status.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/utility.h"
+#include "bbs/com.h"
 
-void print_quests();
-void set_question(int ii);
+#include "core/strings.h"
+#include "sdk/filenames.h"
 
-void print_quests() {
-  File file(syscfg.datadir, VOTING_DAT);
+using namespace wwiv::core;
+using namespace wwiv::sdk;
+using namespace wwiv::strings;
+
+static void print_quests() {
+  File file(FilePath(a()->config()->datadir(), VOTING_DAT));
   if (!file.Open(File::modeBinary | File::modeReadOnly)) {
     return;
   }
   bool abort = false;
   for (int i = 1; (i <= 20) && !abort; i++) {
-    file.Seek(static_cast<long>(i - 1) * sizeof(votingrec), File::seekBegin);
+    file.Seek(static_cast<long>(i - 1) * sizeof(votingrec), File::Whence::begin);
 
     votingrec v;
     file.Read(&v, sizeof(votingrec));
-    char szBuffer[ 255 ];
+    char szBuffer[255];
     sprintf(szBuffer, "|#2%2d|#7) |#1%s", i, v.numanswers ? v.question : ">>> NO QUESTION <<<");
-    pla(szBuffer, &abort);
+    bout.bpla(szBuffer, &abort);
   }
   bout.nl();
   if (abort) {
@@ -46,15 +54,13 @@ void print_quests() {
   }
 }
 
-
-void set_question(int ii) {
+static void set_question(int ii) {
   votingrec v;
   voting_response vr;
 
   bout << "|#7Enter new question or just press [|#1Enter|#7] for none.\r\n: ";
-  std::string question;
-  inputl(&question, 75, true);
-  strcpy(v.question, question.c_str());
+  auto question = input_text(75);
+  to_char_array(v.question, question);
   v.numanswers = 0;
   vr.numresponses = 0;
   vr.response[0] = 'X';
@@ -74,9 +80,8 @@ void set_question(int ii) {
     bout.nl(2);
     while (v.numanswers < 19) {
       bout << "|#2" << v.numanswers + 1 << "|#7: ";
-      std::string response;
-      inputl(&response, 63, true);
-      strcpy(vr.response, response.c_str());
+      auto response = input_text(63);
+      to_char_array(vr.response, response);
       vr.numresponses = 0;
       v.responses[v.numanswers] = vr;
       if (response.empty()) {
@@ -87,31 +92,29 @@ void set_question(int ii) {
     }
   }
 
-  File votingDat(syscfg.datadir, VOTING_DAT);
+  File votingDat(FilePath(a()->config()->datadir(), VOTING_DAT));
   votingDat.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile);
-  votingDat.Seek(ii * sizeof(votingrec), File::seekBegin);
+  votingDat.Seek(ii * sizeof(votingrec), File::Whence::begin);
   votingDat.Write(&v, sizeof(votingrec));
   votingDat.Close();
 
-  questused[ii] = (v.numanswers) ? 1 : 0;
-
-  WUser u;
-  application()->users()->ReadUser(&u, 1);
-  int nNumUsers = application()->users()->GetNumberOfUserRecords();
+  User u;
+  a()->users()->readuser(&u, 1);
+  int nNumUsers = a()->users()->num_user_records();
   for (int i1 = 1; i1 <= nNumUsers; i1++) {
-    application()->users()->ReadUser(&u, i1);
+    a()->users()->readuser(&u, i1);
     u.SetVote(nNumUsers, 0);
-    application()->users()->WriteUser(&u, i1);
+    a()->users()->writeuser(&u, i1);
   }
 }
 
 
 void ivotes() {
-  votingrec v;
+  votingrec v{};
 
-  File votingDat(syscfg.datadir, VOTING_DAT);
+  File votingDat(FilePath(a()->config()->datadir(), VOTING_DAT));
   votingDat.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile);
-  int n = static_cast<int>((votingDat.GetLength() / sizeof(votingrec)) - 1);
+  int n = static_cast<int>((votingDat.length() / sizeof(votingrec)) - 1);
   if (n < 20) {
     v.question[0] = '\0';
     v.numanswers = 0;
@@ -125,47 +128,45 @@ void ivotes() {
     print_quests();
     bout.nl();
     bout << "|#2Which (Q=Quit) ? ";
-    std::string questionNumber;
-    input(&questionNumber, 2);
-    if (questionNumber == "Q") {
+    std::string questionum = input(2);
+    if (questionum == "Q") {
       done = true;
     }
-    int i = atoi(questionNumber.c_str());
+    int i = to_number<int>(questionum);
     if (i > 0 && i < 21) {
       set_question(i - 1);
     }
-  } while (!done && !hangup);
+  } while (!done && !a()->hangup_);
 }
 
 
 void voteprint() {
   votingrec v;
 
-  int nNumUserRecords = application()->users()->GetNumberOfUserRecords();
+  int nNumUserRecords = a()->users()->num_user_records();
   char *x = static_cast<char *>(BbsAllocA(20 * (2 + nNumUserRecords)));
   if (x == nullptr) {
     return;
   }
   for (int i = 0; i <= nNumUserRecords; i++) {
-    WUser u;
-    application()->users()->ReadUser(&u, i);
+    User u;
+    a()->users()->readuser(&u, i);
     for (int i1 = 0; i1 < 20; i1++) {
       x[ i1 + i * 20 ] = static_cast<char>(u.GetVote(i1));
     }
   }
-  File votingText(syscfg.gfilesdir, VOTING_TXT);
+  File votingText(FilePath(a()->config()->gfilesdir(), VOTING_TXT));
   votingText.Open(File::modeReadWrite | File::modeBinary | File::modeCreateFile | File::modeText);
   votingText.Write(votingText.full_pathname());
 
-  File votingDat(syscfg.datadir, VOTING_DAT);
-
-  application()->GetStatusManager()->RefreshStatusCache();
+  File votingDat(FilePath(a()->config()->datadir(), VOTING_DAT));
+  a()->status_manager()->RefreshStatusCache();
 
   for (int i1 = 0; i1 < 20; i1++) {
     if (!votingDat.Open(File::modeReadOnly | File::modeBinary)) {
       continue;
     }
-    votingDat.Seek(i1 * sizeof(votingrec), File::seekBegin);
+    votingDat.Seek(i1 * sizeof(votingrec), File::Whence::begin);
     votingDat.Read(&v, sizeof(votingrec));
     votingDat.Close();
     if (v.numanswers) {
@@ -179,11 +180,11 @@ void voteprint() {
         text.str("     ");
         text << v.responses[i2].response << "\r\n";
         votingText.Write(text.str());
-        for (int i3 = 0; i3 < application()->GetStatusManager()->GetUserCount(); i3++) {
-          if (x[i1 + 20 * smallist[i3].number] == i2 + 1) {
+        for (const auto& n : a()->names()->names_vector()) {
+          if (x[i1 + 20 * n.number] == i2 + 1) {
             text.clear();
             text.str("          ");
-            text << smallist[i3].name << " #" << smallist[i3].number << "\r\n";
+            text << n.name << " #" << n.number << "\r\n";
             votingText.Write(text.str());
           }
         }

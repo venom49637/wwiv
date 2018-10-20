@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                          WWIV Version 5.0x                             */
-/*               Copyright (C)2015, WWIV Software Services                */
+/*                            WWIV Version 5                              */
+/*               Copyright (C)2017, WWIV Software Services                */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,5 +18,10 @@
 #ifndef __INCLUDED_SDK_TEMPLATE_H__
 #define __INCLUDED_SDK_TEMPLATE_H__
 
+namespace wwiv {
+namespace sdk {
+
+}  // namespace sdk
+}  // namespace wwiv
 
 #endif  // __INCLUDED_SDK_TEMPLATE_H__

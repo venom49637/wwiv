@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -24,18 +24,17 @@
 
 #include "core/file.h"
 #include "core/strings.h"
+#include "core/version.h"
 #include "core_test/file_helper.h"
 #include "sdk/config.h"
 #include "sdk/networks.h"
 #include "sdk_test/sdk_helper.h"
 
 using namespace std;
+using namespace wwiv::core;
 using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
-// TODO(rushfan): These tests don't work yet - just testing locally
-// for now. Need to create a tree under the tempdir containing a 
-// stub BBS.
 class ConfigTest : public testing::Test {
 public:
   SdkHelper helper;
@@ -48,7 +47,7 @@ TEST_F(ConfigTest, Helper_CreatedBBSRoot) {
 TEST_F(ConfigTest, Config_CurrentDirectory) {
   ASSERT_EQ(0, chdir(helper.root().c_str()));
 
-  Config config;
+  Config config(File::current_directory());
   ASSERT_TRUE(config.IsInitialized());
   EXPECT_EQ(helper.data_, config.datadir());
 }
@@ -65,8 +64,8 @@ TEST_F(ConfigTest, SetConfig_Stack) {
 
   configrec c{};
   strcpy(c.systemname, "mysys");
-  config.set_config(&c);
-  ASSERT_STREQ(c.systemname, config.config()->systemname);
+  config.set_config(&c, true);
+  ASSERT_EQ(c.systemname, config.system_name());
 }
 
 TEST_F(ConfigTest, SetConfig_Heap) {
@@ -75,8 +74,20 @@ TEST_F(ConfigTest, SetConfig_Heap) {
 
   configrec* c = new configrec();
   strcpy(c->systemname, "mysys");
-  config.set_config(c);
-  ASSERT_STREQ(c->systemname, config.config()->systemname);
+  config.set_config(c, true);
+  ASSERT_EQ(c->systemname, config.system_name());
   EXPECT_NE(nullptr, c);
   delete c;
+}
+
+TEST_F(ConfigTest, WrittenByNumVersion) {
+  Config config(helper.root());
+
+  ASSERT_EQ(wwiv_num_version, config.written_by_wwiv_num_version());
+}
+
+TEST_F(ConfigTest, Is5XXOrLater) {
+  Config config(helper.root());
+
+  ASSERT_TRUE(config.is_5xx_or_later());
 }

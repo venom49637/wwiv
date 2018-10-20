@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -19,38 +19,23 @@
 #ifndef _QWK_H_
 #define _QWK_H_
 
+#include <ctime>
 #include <string>
 
+#include "core/datetime.h"
 #include "sdk/vardec.h"
 #include "printfile.h"
 
-#define QWK_DIRECTORY (syscfgovr.batchdir)
-
-// If you have a HUGE transfer section, this define will not read extended
-// descriptions
-// #define HUGE_TRAN
-
-#define MAXMAIL 255
-#define EMAIL_STORAGE 2
+#define QWK_DIRECTORY (a()->batch_directory().c_str())
 
 #define append_block(file, memory, size) write(file, memory, size)
 #define SETREC(f,i)  lseek(f,((long) (i))*((long)sizeof(uploadsrec)),SEEK_SET);
 #define SET_BLOCK(file, pos, size) lseek(file, (long)pos * (long)size, SEEK_SET)
 
-#define GATSECLEN (4096L+2048L*512L)
-#ifndef MSG_STARTING
-#define MSG_STARTING ((current_gat_section()) * GATSECLEN + 4096L)
-#endif
-
-#define DOTS 5
-
 #define MAX_BULLETINS 50
 #define BULL_SIZE     81
 #define BNAME_SIZE    13
 
-
-// Give us 3000 extra bytes to play with in the message text
-#define PAD_SPACE 3000
 
 #pragma pack(push, 1)
 struct qwk_record {
@@ -99,11 +84,12 @@ struct qwk_junk {
   bool abort;
 
   char in_email;
+  // This should be 25 chars so we want 1 more for null.
   char email_title[25];
 };
 
 struct qwk_config {
-  long fu;
+  daten_t fu;
   long timesd;
   long timesu;
   uint16_t max_msgs;
@@ -149,9 +135,9 @@ void qwk_remove_null(char *memory, int size);
 void build_control_dat(struct qwk_junk *qwk_info);
 int _fmsbintoieee(float *src4, float *dest4);
 int _fieeetomsbin(float *src4, float *dest4);
-char * qwk_system_name(char *qwkname);
+char* qwk_system_name(char *qwkname);
 void qwk_menu();
-int select_qwk_protocol(struct qwk_junk *qwk_info);
+unsigned short select_qwk_protocol(struct qwk_junk *qwk_info);
 void insert_after_routing(char *text, char *text2insert, long *len);
 void close_qwk_cfg(struct qwk_config *qwk_cfg);
 void read_qwk_cfg(struct qwk_config *qwk_cfg);
@@ -170,12 +156,10 @@ std::string qwk_which_zip();
 std::string qwk_which_protocol();
 void upload_reply_packet();
 void ready_reply_packet(const char *packet_name, const char *msg_name);
-void make_text_ready(char *text, long len);
-char* make_text_file(int filenumber, long *size, int curpos, int blocks);
-void qwk_email_text(char *text, long size, char *title, char *to);
-void qwk_inmsg(const char *text, long size, messagerec *m1, const char *aux, const char *name, time_t thetime);
+void qwk_email_text(char *text, char *title, char *to);
+void qwk_inmsg(const char *text,messagerec *m1, const char *aux, const char *name, const wwiv::core::DateTime& dt);
 void process_reply_dat(char *name);
-void qwk_post_text(char *text, long size, char *title, int sub);
+void qwk_post_text(char *text, char *title, int sub);
 int find_qwk_sub(struct qwk_sub_conf *subs, int amount, int fromsub);
 void qwk_receive_file(char *fn, bool *received, int i);
 void qwk_sysop();

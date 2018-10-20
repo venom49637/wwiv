@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015,WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services            */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -23,5 +23,34 @@
 #if !defined(__unix__) && !defined(_WIN32) && defined(__APPLE__) && defined(__MACH__)
 #define __unix__
 #endif
+
+// TODO(rushfan): This whole thing probably needs to be redone.
+#if defined(_MSC_VER) && (_MSC_VER >= 1700)
+   // Enable SAL attributes.
+#  ifndef _USE_ATTRIBUTES_FOR_SAL
+#  define _USE_ATTRIBUTES_FOR_SAL 1
+#  endif // _USE_ATTRIBUTES_FOR_SAL
+#endif
+
+// WWIV's daten type is a 32-bit unsigned int. It can never be used for date
+// arithemetic since negative values don't exist.  This will allow us to
+// truncate a 64-bit time_t value for use till 2106.
+#ifndef DATEN_T_DEFINED
+#include <cstdint>
+typedef uint32_t daten_t;
+#define DATEN_T_DEFINED
+#endif
+
+#ifdef _MSC_VER
+#  ifdef _WIN64
+   typedef int64_t ssize_t;
+#  else
+   typedef int32_t ssize_t;
+#  endif // _WIN64
+#endif // MSVC
+
+#ifdef _WIN32
+   typedef int pid_t;
+#endif // _WIN32
 
 #endif // __INCLUDED_PLATFORM_WWIVPORT_H__

@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1999-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1999-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -17,15 +17,18 @@
 /*                                                                        */
 /**************************************************************************/
 // Always declare wwiv_windows.h first to avoid collisions on defines.
-#include "bbs/wwiv_windows.h"
+#include "core/wwiv_windows.h"
 
 #include <chrono>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 
-#include "bbs/wcomm.h"
-#include "bbs/wwiv.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsovl3.h"
+#include "bbs/utility.h"
+#include "bbs/remote_io.h"
+
 #include "bbs/prot/zmodem.h"
 #include "core/os.h"
 #include "core/strings.h"
@@ -38,14 +41,24 @@ using namespace wwiv::strings;
 int ZModemWindowStatus( const char *fmt, ... );
 int ZModemWindowXferStatus( const char *fmt, ... );
 int doIO( ZModem *info );
-void ProcessLocalKeyDuringZmodem();
 
 #if defined(_MSC_VER)
 #pragma warning( push )
 #pragma warning( disable : 4706 4127 4244 4100 )
 #endif
 
-bool NewZModemSendFile( const char *pszFileName ) {
+static void ProcessLocalKeyDuringZmodem() {
+  if (!a()->localIO()->KeyPressed()) {
+    return;
+  }
+  char localChar = a()->localIO()->GetChar();
+  bout.SetLastKeyLocal(true);
+  if (!localChar) {
+    a()->handle_sysop_key(a()->localIO()->GetChar());
+  }
+}
+
+bool NewZModemSendFile(const std::string& fn) {
 	ZModem info;
 	info.ifd = info.ofd = -1;
 	info.zrinitflags = 0;
@@ -70,16 +83,18 @@ bool NewZModemSendFile( const char *pszFileName ) {
 	int f3			= 0;
 	int nFilesRem	= 0;
 	int nBytesRem	= 0;
-	done = ZmodemTFile( pszFileName, pszFileName, f0, f1, f2, f3, nFilesRem, nBytesRem, &info );
+  char file_name[255];
+  to_char_array(file_name, fn);
+	done = ZmodemTFile( file_name, file_name, f0, f1, f2, f3, nFilesRem, nBytesRem, &info );
 	switch ( done ) {
 	case 0:
-		ZModemWindowXferStatus( "Sending File: %s", pszFileName );
+		ZModemWindowXferStatus( "Sending File: %s", file_name );
 		break;
 	case ZmErrCantOpen:
-		ZModemWindowXferStatus( "ERROR Opening File: %s", pszFileName );
+		ZModemWindowXferStatus( "ERROR Opening File: %s", file_name );
 		break;
 	case ZmFileTooLong:
-		ZModemWindowXferStatus( "ERROR FileName \"%s\" is too long", pszFileName );
+		ZModemWindowXferStatus( "ERROR FileName \"%s\" is too long", file_name );
 		break;
 	case ZmDone:
 		return true;
@@ -108,7 +123,7 @@ bool NewZModemSendFile( const char *pszFileName ) {
 }
 
 
-bool NewZModemReceiveFile( const char *pszFileName ) {
+bool NewZModemReceiveFile( const char *file_name ) {
 	ZModem info;
 	info.ifd = info.ofd = -1;
 	info.zrinitflags = 0;
@@ -122,15 +137,13 @@ bool NewZModemReceiveFile( const char *pszFileName ) {
 	nDone = doIO( &info );
 	bool ret = ( nDone == ZmDone ) ? true : false;
 	if ( ret ) {
-		char szNewFileName[ MAX_PATH ];
-		char szOldFileName[ MAX_PATH ];
-		strcpy( szNewFileName, pszFileName );
+		char szNewFileName[MAX_PATH];
+		char szOldFileName[MAX_PATH];
+		strcpy( szNewFileName, file_name );
 		StringRemoveWhitespace( szNewFileName );
 
-		sprintf(szOldFileName, "%s%s", syscfgovr.tempdir, stripfn(pszFileName));
+		sprintf(szOldFileName, "%s%s", a()->temp_directory().c_str(), stripfn(file_name));
 		StringRemoveWhitespace(szOldFileName);
-        std::clog << "szOldFileName=" << szOldFileName
-                  << "szNewFileName=" << szNewFileName;
 		movefile( szOldFileName, szNewFileName, false );
 	}
 	return ret;
@@ -149,10 +162,10 @@ int ZModemWindowStatus(const char *fmt,...) {
 	va_start( ap, fmt );
 	vsnprintf( szBuffer, sizeof( szBuffer ), fmt, ap );
 	va_end( ap );
-	int oldX = session()->localIO()->WhereX();
-	int oldY = session()->localIO()->WhereY();
-	session()->localIO()->LocalXYPrintf( 1, 10, "%s                           ", szBuffer );
-	session()->localIO()->LocalGotoXY( oldX, oldY );
+	int oldX = a()->localIO()->WhereX();
+	int oldY = a()->localIO()->WhereY();
+	a()->localIO()->PutsXY( 1, 10, StrCat(szBuffer, "                           "));
+	a()->localIO()->GotoXY( oldX, oldY );
 	return 0;
 }
 
@@ -168,10 +181,10 @@ int ZModemWindowXferStatus(const char *fmt,...) {
 	va_start( ap, fmt );
 	vsnprintf( szBuffer, sizeof( szBuffer ), fmt, ap );
 	va_end( ap );
-	int oldX = session()->localIO()->WhereX();
-	int oldY = session()->localIO()->WhereY();
-	session()->localIO()->LocalXYPrintf( 1, 1, "%s                           ", szBuffer );
-	session()->localIO()->LocalGotoXY( oldX, oldY );
+	int oldX = a()->localIO()->WhereX();
+	int oldY = a()->localIO()->WhereY();
+  a()->localIO()->PutsXY(1, 1, StrCat(szBuffer, "                           "));
+	a()->localIO()->GotoXY( oldX, oldY );
 	return 0;
 }
 
@@ -198,7 +211,7 @@ int doIO( ZModem *info ) {
 #endif
 		// Don't loop/sleep if the timeout is 0 (which means streaming), this makes the
 		// performance < 1k/second vs. 8-9k/second locally
-		while ( ( info->timeout > 0 ) && !session()->remoteIO()->incoming() && !hangup ) {
+		while ( ( info->timeout > 0 ) && !a()->remoteIO()->incoming() && !a()->hangup_ ) {
 			sleep_for(milliseconds(100));
 			time_t tNow = time( nullptr );
 			if ( ( tNow - tThen ) > info->timeout ) {
@@ -211,7 +224,7 @@ int doIO( ZModem *info ) {
 		}
 
 		ProcessLocalKeyDuringZmodem();
-		if (hangup) {
+		if (a()->hangup_) {
 			return ZmErrCancel;
 		}
 
@@ -222,12 +235,12 @@ int doIO( ZModem *info ) {
 			//%%TODO: signal parent we aborted.
 			return 1;
 		}
-		bool bIncomming = session()->remoteIO()->incoming();
+		bool bIncomming = a()->remoteIO()->incoming();
 		if( !bIncomming ) {
 			done = ZmodemTimeout(info);
 			//puts( "ZmodemTimeout\r\n" );
 		} else {
-			int len = session()->remoteIO()->read( reinterpret_cast<char*>( buffer ), ZMODEM_RECEIVE_BUFFER_SIZE );
+			int len = a()->remoteIO()->read( reinterpret_cast<char*>( buffer ), ZMODEM_RECEIVE_BUFFER_SIZE );
 			done = ZmodemRcv( buffer, len, info );
 #if defined(_DEBUG)
 			zmodemlog( "ZmodemRcv [%d chars] [done:%d]\r\n", len, done );
@@ -243,7 +256,7 @@ int ZXmitStr(u_char *str, int len, ZModem *info) {
 #if defined(_DEBUG)
 	zmodemlog( "ZXmitStr Size=[%d]\r\n", len );
 #endif
-	session()->remoteIO()->write( reinterpret_cast<const char*>( str ),  len );
+	a()->remoteIO()->write( reinterpret_cast<const char*>( str ),  len );
 	return 0;
 }
 
@@ -278,11 +291,11 @@ int ZAttn(ZModem *info) {
 #endif
 			sleep_for(milliseconds(100));
 		} else {
-			rputch( *ptr, true );
+			bout.rputch( *ptr, true );
 			//append_buffer(&outputBuf, ptr, 1, ofd);
 		}
 	}
-	FlushOutComChBuffer();
+	bout.flush();
 	return 0;
 }
 
@@ -351,18 +364,18 @@ void ZStatus(int type, int value, char *msg) {
 }
 
 
-FILE * ZOpenFile(char *pszFileName, u_long crc, ZModem *info) {
-	char szTempFileName[ MAX_PATH ];
-	sprintf( szTempFileName, "%s%s", syscfgovr.tempdir, pszFileName );
+FILE * ZOpenFile(char *file_name, u_long crc, ZModem *info) {
+	char szTempFileName[MAX_PATH];
+	sprintf( szTempFileName, "%s%s", a()->temp_directory().c_str(), file_name );
 #if defined(_DEBUG)
-	zmodemlog( "ZOpenFile filename=%s %s\r\n", pszFileName, szTempFileName );
+	zmodemlog( "ZOpenFile filename=%s %s\r\n", file_name, szTempFileName );
 #endif
 	return fopen( szTempFileName, "wb" );
 
 	//	struct stat	buf;
 	//	bool		exists;	/* file already exists */
 	//	static	int		changeCount = 0;
-	//	char		szFileName2[MAXPATHLEN];
+	//	char		file_name2[MAXPATHLEN];
 	//	int		apnd = 0;
 	//	int		f0,f1;
 	//	FILE		*ofile;
@@ -372,11 +385,11 @@ FILE * ZOpenFile(char *pszFileName, u_long crc, ZModem *info) {
 	//	 * if relative path, do we want to prepend something?
 	//	 */
 	//
-	//	if( *pszFileName == '/' )	/* for now, disallow absolute paths */
+	//	if( *file_name == '/' )	/* for now, disallow absolute paths */
 	//	  return nullptr;
 	//
 	//	buf.st_size = 0;
-	//	if( stat(pszFileName, &buf) == 0 )
+	//	if( stat(file_name, &buf) == 0 )
 	//	  exists = True;
 	//	else if( errno == ENOENT )
 	//	  exists = False;
@@ -408,7 +421,7 @@ FILE * ZOpenFile(char *pszFileName, u_long crc, ZModem *info) {
 	//	}
 	//
 	//	zmodemlog("ZOpenFile: %s, f0=%x, f1=%x, exists=%d, size=%d/%d\n",
-	//	  pszFileName, f0,f1, exists, buf.st_size, info->len);
+	//	  file_name, f0,f1, exists, buf.st_size, info->len);
 	//
 	//	if( f0 == ZCRESUM ) {	/* if exists, and we already have it, return */
 	//	  if( exists  &&  buf.st_size == info->len )
@@ -434,8 +447,8 @@ FILE * ZOpenFile(char *pszFileName, u_long crc, ZModem *info) {
 	//	    break;
 	//
 	//	  case ZMCRC:		/* take if different CRC or length */
-	//	    zmodemlog("  ZMCRC: crc=%x, FileCrc=%x\n", crc, FileCrc(pszFileName) );
-	//	    if( exists  &&  info->len == buf.st_size && crc == FileCrc(pszFileName) )
+	//	    zmodemlog("  ZMCRC: crc=%x, FileCrc=%x\n", crc, FileCrc(file_name) );
+	//	    if( exists  &&  info->len == buf.st_size && crc == FileCrc(file_name) )
 	//	      return nullptr;
 	//	    break;
 	//
@@ -463,28 +476,28 @@ FILE * ZOpenFile(char *pszFileName, u_long crc, ZModem *info) {
 	//	  case ZMCHNG:	/* invent new filename if exists */
 	//	    if( exists ) {
 	//	      while( exists ) {
-	//		sprintf(szFileName2, "%s_%d", pszFileName, changeCount++);
-	//		exists = stat(szFileName2, &buf) == 0 || errno != ENOENT;
+	//		sprintf(file_name2, "%s_%d", file_name, changeCount++);
+	//		exists = stat(file_name2, &buf) == 0 || errno != ENOENT;
 	//	      }
-	//	      pszFileName = szFileName2;
+	//	      file_name = file_name2;
 	//	    }
 	//	    break;
 	//	}
 	//
 	//	/* here if we've decided to accept */
-	//	if( exists && !apnd && unlink(pszFileName) != 0 )
+	//	if( exists && !apnd && unlink(file_name) != 0 )
 	//	  return nullptr;
 	//
 	//	/* TODO: build directory path if needed */
 	//
-	//	ZModemWindowStatus("Receiving: \"%s\"", pszFileName);
+	//	ZModemWindowStatus("Receiving: \"%s\"", file_name);
 	//
 	//	WindowXferGaugeMax(info->len);
 	//
-	//	ofile = fopen(pszFileName, apnd ? "a" : "w");
+	//	ofile = fopen(file_name, apnd ? "a" : "w");
 	//
 	//	zmodemlog("  ready to open %s/%s: apnd = %d, file = %lx\n",
-	//	  getcwd(path,sizeof(path)), pszFileName, apnd, (long)ofile);
+	//	  getcwd(path,sizeof(path)), file_name, apnd, (long)ofile);
 	//
 	//	return ofile;
 	//return nullptr;
@@ -546,7 +559,7 @@ void ZIdleStr(unsigned char *buf, int len, ZModem *info) {
 	//PutTerm(buf, len);
 	return;
 #if 0
-	char szBuffer[ 1024 ];
+	char szBuffer[1024];
 	strcpy( szBuffer, reinterpret_cast<const char *>( buf  ) );
 	szBuffer[len] = '\0';
 	if ( strlen( szBuffer ) == 1 ) {
@@ -555,20 +568,6 @@ void ZIdleStr(unsigned char *buf, int len, ZModem *info) {
 		zmodemlog( "ZIdleStr: [%s]\r\n", szBuffer );
 	}
 #endif
-}
-
-
-void ProcessLocalKeyDuringZmodem() {
-	if ( session()->localIO()->LocalKeyPressed() ) {
-		char localChar = session()->localIO()->LocalGetChar();
-		session()->SetLastKeyLocal( true );
-		if (!(g_flags & g_flag_allow_extended)) {
-			if (!localChar) {
-				localChar = session()->localIO()->LocalGetChar();
-				session()->localIO()->skey(localChar);
-			}
-		}
-	}
 }
 
 #if defined(_MSC_VER)

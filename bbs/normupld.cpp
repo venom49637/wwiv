@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2015, WWIV Software Services             */
+/*                              WWIV Version 5.x                          */
+/*             Copyright (C)1998-2017, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -18,16 +18,28 @@
 /**************************************************************************/
 #include <string>
 
+#include "bbs/batch.h"
+#include "bbs/bbs.h"
+#include "bbs/bbsutl.h"
+#include "bbs/com.h"
 #include "bbs/datetime.h"
 #include "bbs/input.h"
 #include "bbs/instmsg.h"
-#include "bbs/keycodes.h"
-#include "bbs/wconstants.h"
-#include "bbs/wstatus.h"
-#include "bbs/wwiv.h"
+#include "bbs/sysoplog.h"
+#include "local_io/keycodes.h"
+
+#include "bbs/sr.h"
+#include "bbs/utility.h"
+#include "bbs/xfer.h"
+#include "bbs/xferovl.h"
+#include "bbs/xferovl1.h"
+#include "local_io/wconstants.h"
 #include "core/strings.h"
+#include "sdk/status.h"
 
 using std::string;
+using namespace wwiv::core;
+using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -41,19 +53,19 @@ void normalupload(int dn) {
   int ok = 1;
 
   dliscan1(dn);
-  directoryrec d = directories[dn];
-  if (session()->numf >= d.maxfiles) {
+  directoryrec d = a()->directories[dn];
+  if (a()->numf >= d.maxfiles) {
     bout.nl(3);
     bout << "This directory is currently full.\r\n\n";
     return;
   }
-  if ((d.mask & mask_no_uploads) && (!dcs())) {
+  if ((d.mask & mask_no_uploads) && !dcs()) {
     bout.nl(2);
     bout << "Uploads are not allowed to this directory.\r\n\n";
     return;
   }
   bout << "|#9Filename: ";
-  char szInputFileName[ MAX_PATH ];
+  char szInputFileName[MAX_PATH];
   input(szInputFileName, 12);
   if (!okfn(szInputFileName)) {
     szInputFileName[0] = '\0';
@@ -80,12 +92,12 @@ void normalupload(int dn) {
     ok = 0;
     string supportedExtensions;
     for (int k = 0; k < MAX_ARCS; k++) {
-      if (arcs[k].extension[0] && arcs[k].extension[0] != ' ') {
+      if (a()->arcs[k].extension[0] && a()->arcs[k].extension[0] != ' ') {
         if (!supportedExtensions.empty()) {
           supportedExtensions += ", ";
         }
-        supportedExtensions += arcs[k].extension;
-        if (wwiv::strings::IsEquals(szInputFileName + 9, arcs[k].extension)) {
+        supportedExtensions += a()->arcs[k].extension;
+        if (wwiv::strings::IsEquals(szInputFileName + 9, a()->arcs[k].extension)) {
           ok = 1;
         }
       }
@@ -98,13 +110,14 @@ void normalupload(int dn) {
     }
   }
   strcpy(u.filename, szInputFileName);
-  u.ownerusr = static_cast<unsigned short>(session()->usernum);
+  u.ownerusr = a()->usernum;
   u.ownersys = 0;
   u.numdloads = 0;
   u.unused_filetype = 0;
   u.mask = 0;
-  strcpy(u.upby, session()->user()->GetUserNameAndNumber(session()->usernum));
-  strcpy(u.date, date());
+  const string unn = a()->names()->UserName(a()->usernum);
+  strcpy(u.upby, unn.c_str());
+  to_char_array(u.date, date());
   bout.nl();
   ok = 1;
   bool xfer = true;
@@ -119,13 +132,9 @@ void normalupload(int dn) {
       ok = 0;
     }
   }
-  char szUnalignedFile[MAX_PATH];
-  strcpy(szUnalignedFile, szInputFileName);
-  unalign(szUnalignedFile);
-  char szReceiveFileName[ MAX_PATH ];
-  sprintf(szReceiveFileName, "%s%s", d.path, szUnalignedFile);
+  const auto receive_fn = FilePath(d.path, unalign(szInputFileName));
   if (ok && yesno()) {
-    if (File::Exists(d.path, szUnalignedFile)) {
+    if (File::Exists(receive_fn)) {
       if (dcs()) {
         xfer = false;
         bout.nl(2);
@@ -138,7 +147,7 @@ void normalupload(int dn) {
         bout << "That file is already here.\r\n\n";
         ok = 0;
       }
-    } else if (!incom) {
+    } else if (!a()->context().incom()) {
       bout.nl();
       bout << "File isn't already there.\r\nCan't upload locally.\r\n\n";
       ok = 0;
@@ -152,30 +161,31 @@ void normalupload(int dn) {
         bout << "upload other programs.  If you have\r\ntrouble with this policy, please contact\r\n";
         bout << "the sysop.\r\n\n";
         const string message = StringPrintf("Wanted to upload \"%s\"", u.filename);
-        add_ass(5, message.c_str());
+        sysoplog() << "*** ASS-PTS: " << 5 << ", Reason: [" << message << "]";
+        a()->user()->IncrementAssPoints(5);
         ok = 0;
       } else {
         u.mask = mask_PD;
       }
     }
-    if (ok && !application()->HasConfigFlag(OP_FLAGS_FAST_SEARCH)) {
+    if (ok && !a()->HasConfigFlag(OP_FLAGS_FAST_SEARCH)) {
       bout.nl();
-      bout << "Checking for same file in other directories...\r\n\n";
+      bout << "Checking for same file in other a()->directories...\r\n\n";
       int nLastLineLength = 0;
-      for (int i = 0; i < session()->num_dirs && udir[i].subnum != -1; i++) {
+      for (size_t i = 0; i < a()->directories.size() && a()->udir[i].subnum != -1; i++) {
         string buffer = "Scanning ";
-        buffer += directories[udir[i].subnum].name;
+        buffer += a()->directories[a()->udir[i].subnum].name;
         int nBufferLen = buffer.length();
         for (int i3 = nBufferLen; i3 < nLastLineLength; i3++) {
           buffer += " ";
         }
         nLastLineLength = nBufferLen;
         bout << buffer << "\r";
-        dliscan1(udir[i].subnum);
+        dliscan1(a()->udir[i].subnum);
         int i1 = recno(u.filename);
         if (i1 >= 0) {
           bout.nl();
-          bout << "Same file found on " << directories[udir[i].subnum].name << wwiv::endl;
+          bout << "Same file found on " << a()->directories[a()->udir[i].subnum].name << wwiv::endl;
           if (dcs()) {
             bout.nl();
             bout << "|#5Upload anyway? ";
@@ -190,8 +200,8 @@ void normalupload(int dn) {
           }
         }
       }
-      string filler = charstr(nLastLineLength, SPACE);
-      bout << filler << "\r";
+
+      bout << string(nLastLineLength, SPACE) << "\r";
       if (ok) {
         dliscan1(dn);
       }
@@ -200,28 +210,25 @@ void normalupload(int dn) {
     if (ok) {
       bout.nl();
       bout << "Please enter a one line description.\r\n:";
-      inputl(u.description, 58);
+      auto desc = input_text(58);
+      to_char_array(u.description, desc);
       bout.nl();
-      char *pszExtendedDescription = nullptr;
-      modify_extended_description(&pszExtendedDescription, directories[dn].name);
-      if (pszExtendedDescription) {
-        add_extended_description(u.filename, pszExtendedDescription);
+      string ext_desc;
+      modify_extended_description(&ext_desc, a()->directories[dn].name);
+      if (!ext_desc.empty()) {
+        add_extended_description(u.filename, ext_desc);
         u.mask |= mask_extended;
-        free(pszExtendedDescription);
       }
       bout.nl();
       if (xfer) {
-        write_inst(INST_LOC_UPLOAD, udir[session()->GetCurrentFileArea()].subnum, INST_FLAGS_ONLINE);
-        double ti = timer();
-        receive_file(szReceiveFileName, &ok, u.filename, dn);
-        ti = timer() - ti;
-        if (ti < 0) {
-          ti += SECONDS_PER_HOUR_FLOAT * HOURS_PER_DAY_FLOAT;
-        }
-        session()->user()->SetExtraTime(session()->user()->GetExtraTime() + static_cast<float>(ti));
+        write_inst(INST_LOC_UPLOAD, a()->current_user_dir().subnum, INST_FLAGS_ONLINE);
+        auto ti = std::chrono::system_clock::now();
+        receive_file(receive_fn, &ok, u.filename, dn);
+        auto used = std::chrono::system_clock::now() - ti;
+        a()->user()->add_extratime(used);
       }
       if (ok) {
-        File file(szReceiveFileName);
+        File file(receive_fn);
         if (ok == 1) {
           if (!file.Open(File::modeBinary | File::modeReadOnly)) {
             ok = 0;
@@ -231,7 +238,7 @@ void normalupload(int dn) {
               delete_extended_description(u.filename);
             }
           }
-          if (ok && !syscfg.upload_cmd.empty()) {
+          if (ok && !a()->upload_cmd.empty()) {
             file.Close();
             bout << "Please wait...\r\n";
             if (!check_ul_event(dn, &u)) {
@@ -246,12 +253,11 @@ void normalupload(int dn) {
         }
         if (ok) {
           if (ok == 1) {
-            long lFileLength = file.GetLength();
-            u.numbytes = lFileLength;
+            u.numbytes = file.length();
             file.Close();
-            session()->user()->SetFilesUploaded(session()->user()->GetFilesUploaded() + 1);
-            modify_database(u.filename, true);
-            session()->user()->SetUploadK(session()->user()->GetUploadK() + bytes_to_k(u.numbytes));
+            a()->user()->SetFilesUploaded(a()->user()->GetFilesUploaded() + 1);
+            add_to_file_database(u.filename);
+            a()->user()->SetUploadK(a()->user()->GetUploadK() + bytes_to_k(u.numbytes));
 
             get_file_idz(&u, dn);
           } else {
@@ -259,10 +265,10 @@ void normalupload(int dn) {
           }
           time_t lCurrentTime;
           time(&lCurrentTime);
-          u.daten = static_cast<unsigned long>(lCurrentTime);
-          File fileDownload(g_szDownloadFileName);
+          u.daten = static_cast<uint32_t>(lCurrentTime);
+          File fileDownload(a()->download_filename_);
           fileDownload.Open(File::modeBinary | File::modeCreateFile | File::modeReadWrite);
-          for (int j = session()->numf; j >= 1; j--) {
+          for (int j = a()->numf; j >= 1; j--) {
             FileAreaSetRecord(fileDownload, j);
             fileDownload.Read(&u1, sizeof(uploadsrec));
             FileAreaSetRecord(fileDownload, j + 1);
@@ -270,26 +276,25 @@ void normalupload(int dn) {
           }
           FileAreaSetRecord(fileDownload, 1);
           fileDownload.Write(&u, sizeof(uploadsrec));
-          ++session()->numf;
+          ++a()->numf;
           FileAreaSetRecord(fileDownload, 0);
           fileDownload.Read(&u1, sizeof(uploadsrec));
-          u1.numbytes = session()->numf;
+          u1.numbytes = a()->numf;
           u1.daten = static_cast<uint32_t>(lCurrentTime);
-          session()->m_DirectoryDateCache[dn] = static_cast<uint32_t>(lCurrentTime);
           FileAreaSetRecord(fileDownload, 0);
           fileDownload.Write(&u1, sizeof(uploadsrec));
           fileDownload.Close();
           if (ok == 1) {
-            WStatus *pStatus = application()->GetStatusManager()->BeginTransaction();
-            pStatus->IncrementNumUploadsToday();
-            pStatus->IncrementFileChangedFlag(WStatus::fileChangeUpload);
-            application()->GetStatusManager()->CommitTransaction(pStatus);
-            sysoplogf("+ \"%s\" uploaded on %s", u.filename, directories[dn].name);
+            a()->status_manager()->Run([](WStatus& s) {
+              s.IncrementNumUploadsToday();
+              s.IncrementFileChangedFlag(WStatus::fileChangeUpload);
+            });
+            sysoplog() << StringPrintf("+ \"%s\" uploaded on %s", u.filename, a()->directories[dn].name);
             bout.nl(2);
             bout.bprintf("File uploaded.\r\n\nYour ratio is now: %-6.3f\r\n", ratio());
             bout.nl(2);
-            if (session()->IsUserOnline()) {
-              application()->UpdateTopScreen();
+            if (a()->IsUserOnline()) {
+              a()->UpdateTopScreen();
             }
           }
         }

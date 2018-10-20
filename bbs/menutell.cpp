@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*             Copyright (C)1998-2014, WWIV Software Services             */
+/*                                WWIV Version 5                          */
+/*             Copyright (C)1998-2016, WWIV Software Services             */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -70,7 +70,7 @@ void ReadChainText() {
   char szTemp[MAX_PATH];
   int iX;
 
-  sprintf(szTemp, "CHAIN.TXT");
+  sprintf(szTemp, DROPFILE_CHAIN_TXT);
   fp = fopen(szTemp, "rt");
   if (!fp) {
     print(LIGHTRED, "");

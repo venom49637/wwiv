@@ -1,7 +1,7 @@
 /**************************************************************************/
 /*                                                                        */
-/*                              WWIV Version 5.0x                         */
-/*           Copyright (C)2014-2015 WWIV Software Services                */
+/*                              WWIV Version 5.x                          */
+/*           Copyright (C)2014-2017, WWIV Software Services               */
 /*                                                                        */
 /*    Licensed  under the  Apache License, Version  2.0 (the "License");  */
 /*    you may not use this  file  except in compliance with the License.  */
@@ -30,29 +30,31 @@
 #include "core_test/file_helper.h"
 #include "sdk/config.h"
 #include "sdk/filenames.h"
+#include "sdk/net.h"
 #include "sdk/networks.h"
 #include "sdk_test/sdk_helper.h"
 
 using namespace std;
-
+using namespace wwiv::core;
 using namespace wwiv::sdk;
 using namespace wwiv::strings;
 
 class NetworkTest : public testing::Test {
 public:
-  NetworkTest() : config(helper.root()) {
-    EXPECT_TRUE(config.IsInitialized());
-    EXPECT_TRUE(CreateNetworksDat(config, { "one", "two" }));
-    networks.reset(new Networks(config));
+  NetworkTest() : config_(helper.root()) {
+    EXPECT_TRUE(config_.IsInitialized());
+    EXPECT_TRUE(CreateNetworksDat({ "one", "two" }));
+    networks.reset(new Networks(config_));
     EXPECT_TRUE(networks->IsInitialized());
   }
 
   virtual void SetUp() {
-    config.IsInitialized();
+    config_.IsInitialized();
   }
 
-  bool CreateNetworksDat(const Config& config, vector<string> names) {
-    File file(config.datadir(), NETWORKS_DAT);
+  bool CreateNetworksDat(std::vector<std::string> names) {
+    std::clog << "Writing NETWORK.DAT to: " << config_.datadir() << std::endl;
+    File file(FilePath(config_.datadir(), NETWORKS_DAT));
     file.Open(File::modeBinary|File::modeWriteOnly|File::modeCreateFile, File::shareDenyNone);
     if (!file.IsOpen()) {
       return false;
@@ -60,12 +62,12 @@ public:
   
     uint16_t sysnum = 1;
     for (const auto& name : names) {
-      const string dir = StrCat(config.root_directory(), File::pathSeparatorString, name);
-      net_networks_rec rec{};
+      const string dir = name;
+      net_networks_rec_disk rec{};
       strcpy(rec.name, name.c_str());
       strcpy(rec.dir, dir.c_str());
       rec.sysnum = sysnum++;
-      file.Write(&rec, sizeof(net_networks_rec));
+      file.Write(&rec, sizeof(net_networks_rec_disk));
     }
 
     return true;
@@ -74,7 +76,7 @@ public:
   Networks& test_networks() const { return *networks.get(); }
 
   SdkHelper helper;
-  Config config;
+  Config config_;
   unique_ptr<Networks> networks;
 };
 
@@ -95,11 +97,11 @@ TEST_F(NetworkTest, Networks_Bracket) {
 TEST_F(NetworkTest, Networks_Dir) {
   const Networks& networks = test_networks();
 
-  const string expected_two_dir = StrCat(config.root_directory(), File::pathSeparatorString, "two");
-  EXPECT_STREQ(expected_two_dir.c_str(), networks.at(1).dir);
-  EXPECT_STREQ(expected_two_dir.c_str(), networks.at("two").dir);
-  EXPECT_STREQ(expected_two_dir.c_str(), networks[1].dir);
-  EXPECT_STREQ(expected_two_dir.c_str(), networks["two"].dir);
+  const std::string expected_two_dir = "two";
+  EXPECT_EQ(expected_two_dir, networks.at(1).dir);
+  EXPECT_EQ(expected_two_dir, networks.at("two").dir);
+  EXPECT_EQ(expected_two_dir, networks[1].dir);
+  EXPECT_EQ(expected_two_dir, networks["two"].dir);
 }
 
 TEST_F(NetworkTest, Networks_NetworkNumber) {
